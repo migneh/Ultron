@@ -1,3 +1,27 @@
+# ── `ultron --doctor`, handled before anything heavy is imported ─────────────
+# The environment check has to work *in* a broken environment: this module
+# imports sounddevice (PortAudio) and PyQt6 at the top, and either of those is
+# exactly what may be missing. So the one flag that diagnoses a broken install
+# is answered before those imports run — otherwise the doctor dies of the very
+# problem it was called to describe.
+if __name__ == "__main__":
+    import sys as _sys
+
+    if "--doctor" in _sys.argv[1:]:
+        import runpy as _runpy
+        from pathlib import Path as _Path
+
+        _doctor = _Path(__file__).resolve().parent / "scripts" / "doctor.py"
+        if not _doctor.exists():
+            print(f"[Ultron] No environment check found at {_doctor}")
+            raise SystemExit(1)
+        _sys.argv = [str(_doctor)]
+        try:
+            _runpy.run_path(str(_doctor), run_name="__main__")
+        except SystemExit as _exit:
+            raise SystemExit(int(_exit.code or 0))
+        raise SystemExit(0)
+
 import platform as _platform
 import subprocess as _subprocess
 
@@ -50,6 +74,8 @@ import numpy as np
 from google import genai
 from google.genai import types
 from ui import UltronUI
+from core              import providers as _providers
+from core.cli          import parse_args
 from core.persona import address_line, normalize_language, speech_protocol
 from memory.memory_manager import (
     load_memory, format_memory_for_prompt,
@@ -556,8 +582,14 @@ def _keep_context_of(exc: BaseException) -> bool:
 
 
 class UltronLive:
-    def __init__(self, ui: UltronUI):
+    def __init__(self, ui: UltronUI, provider_override: str | None = None,
+                 model_override: str | None = None):
         self.ui             = ui
+        # Set by `ultron --provider/--model`. Session-scoped on purpose: a
+        # one-off launch must not rewrite the saved choice, which is what the
+        # AI MODEL panel is for.
+        self._provider_override = provider_override
+        self._model_override    = model_override
         self._asst_name     = "Ultron"   # updated each session from config
         self.session              = None
         self.audio_in_queue       = None
@@ -1473,8 +1505,15 @@ class UltronLive:
 
     async def _run_unified_mode(self, provider: str, model: str):
         """Unified mode runner for all third-party AI providers & standard REST models."""
-        chosen_model = model or ("gemini-2.5-flash" if provider == "gemini" else "default")
+        chosen_model = model
         print(f"[Ultron] Running with AI provider: {provider.upper()} ({chosen_model})...")
+        # Which voice path is live is not obvious from the outside: Gemini Live
+        # streams audio both ways, everything else is STT → provider → edge-tts.
+        # Saying it once is the difference between "it feels laggy" and "I know
+        # why it feels laggy".
+        self.ui.write_log(
+            f"SYS: Voice: local speech loop — mic → {provider.upper()} "
+            f"({chosen_model}) → neural TTS.")
         self.session = None
         self.out_queue = asyncio.Queue(maxsize=200)
         self.audio_in_queue = asyncio.Queue()
@@ -3063,16 +3102,21 @@ class UltronLive:
             _resumed_with = False
             try:
                 from memory.config_manager import get_ai_provider, get_ai_model
-                provider = get_ai_provider() or "gemini"
-                model = get_ai_model()
+                provider, model = _providers.session_choice(
+                    get_ai_provider() or "gemini", get_ai_model(),
+                    self._provider_override, self._model_override,
+                )
 
+                # Live (bidi audio) is a property of the *model*, not of Gemini
+                # alone: Gemini with a normal model runs the same local speech
+                # loop every other provider uses.
                 is_live_gemini = (
                     provider == "gemini" and
                     ("live" in (model or "").lower() or "2.0-flash-exp" in (model or "").lower() or (model or "").lower() == "gemini-2.0-flash")
                 )
 
                 if not is_live_gemini:
-                    chosen_model = model or ("gemini-2.5-flash" if provider == "gemini" else "default")
+                    chosen_model = model
                     try:
                         await self._run_unified_mode(provider, chosen_model)
                     except _ReconnectSignal:
@@ -3306,11 +3350,18 @@ class UltronLive:
             await asyncio.sleep(delay)
 
 def main():
+    args = parse_args()
+
     ui = UltronUI("ultron_avatar.png")
 
     def runner():
         ui.wait_for_api_key()
-        ultron = UltronLive(ui)
+        if args.pick and hasattr(ui, "open_ai_model_panel"):
+            # Queued through the UI's own signal so the panel opens on the Qt
+            # thread rather than from this worker.
+            ui.open_ai_model_panel()
+        ultron = UltronLive(ui, provider_override=args.provider,
+                            model_override=args.model)
         try:
             asyncio.run(ultron.run())
         except KeyboardInterrupt:

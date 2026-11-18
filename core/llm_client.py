@@ -772,6 +772,13 @@ def call_unified(
                 "tool_calls": tc_list,
             }
         except Exception as e:
+            # "Connection refused" on 127.0.0.1:11434 is the most common failure
+            # in the whole app and the least informative. Say what to do.
+            if isinstance(e, requests.exceptions.ConnectionError) or "refused" in str(e).lower():
+                raise RuntimeError(
+                    f"Ollama is not reachable at {url}. Start it (ollama serve) "
+                    f"or switch provider in the AI MODEL panel."
+                ) from e
             print(f"[LLM] Ollama call failed: {e}")
             raise
 

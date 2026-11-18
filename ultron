@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+# ── ultron — start Ultron from this checkout ─────────────────────────────────
+#
+# The Windows launcher is ultron.bat; this is the same thing for macOS and
+# Linux, so the command is called `ultron` everywhere and the two cannot drift.
+# Prefers the project virtual environment, falls back to python3, then python.
+set -u
+
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+if [ -x "$HERE/.venv/bin/python" ]; then
+    PY="$HERE/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+    PY=python3
+else
+    PY=python
+fi
+
+exec "$PY" "$HERE/main.py" "$@"

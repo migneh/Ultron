@@ -2,6 +2,10 @@ import json
 import sys
 from pathlib import Path
 
+# The catalogue of providers and where each one's key is stored lives in one
+# place, next to the code that describes it (see core/providers.py).
+from core.providers import KEY_FIELDS as _PROVIDER_KEY_FIELDS
+
 def get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
@@ -81,16 +85,6 @@ def get_ai_model() -> str:
 # for "claude", nvidia_api_key for "nvidia_nim" and opencode_api_key for
 # "opencode_zen", so those three were saved, reported as unconfigured, and every
 # call was made with an empty key.
-_PROVIDER_KEY_FIELDS = {
-    "gemini":       "gemini_api_key",
-    "gpt":          "openai_api_key",
-    "claude":       "anthropic_api_key",
-    "nvidia_nim":   "nvidia_api_key",
-    "opencode_zen": "opencode_api_key",
-    "deepseek":     "deepseek_api_key",
-    "groq":         "groq_api_key",
-    "openrouter":   "openrouter_api_key",
-}
 
 
 def get_provider_key(provider: str = "") -> str:
@@ -123,33 +117,79 @@ def get_provider_url(provider: str = "") -> str:
         return cfg.get("openai_base_url") or "https://api.openai.com/v1"
     return cfg.get(f"{p}_base_url") or ""
 
-def save_ai_provider(provider: str, model: str, api_key: str = "", base_url: str = "") -> None:
-    """Save chosen AI provider, model, API key, and base URL to config."""
+def _read_config_file() -> tuple[dict, bool]:
+    """(config, was_corrupt). A corrupt file is reported, not silently replaced."""
+    if not CONFIG_FILE.exists():
+        return {}, False
+    try:
+        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        return (data if isinstance(data, dict) else {}), False
+    except Exception:
+        return {}, True
+
+
+def save_ai_choice(provider: str, model: str = "",
+                   api_key: str = "", base_url: str = "") -> dict:
+    """Persist a provider/model choice. The one writer for `ai_provider`.
+
+    Everything that can change the model — the setup screen, the settings
+    panel, a command-line override — comes through here, so the file never ends
+    up with a provider set under one name and read under another. That drift was
+    real: `save_ai_provider()` used to derive the key field as
+    `f"{provider}_api_key"`, which is the wrong name for Claude, NVIDIA NIM and
+    OpenCode Zen, and the setup screen wrote its own shape on top of it. It had
+    no callers anyway; this replaces it.
+
+    Empty `model` falls back to the provider's default, and empty `api_key` /
+    `base_url` leave what is already stored alone — clearing a key is `forget_key`.
+    """
+    from core import providers as _providers
+
+    chosen = _providers.normalise(provider)
     ensure_config_dir()
-    data: dict = {}
-    if CONFIG_FILE.exists():
-        try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
-    data["ai_provider"] = provider.strip().lower()
-    data["ai_model"] = model.strip()
-    p = data["ai_provider"]
-    if api_key:
-        data["api_key"] = api_key.strip()
-        data[f"{p}_api_key"] = api_key.strip()
-        if p == "gemini":
-            data["gemini_api_key"] = api_key.strip()
-        elif p == "gpt":
-            data["openai_api_key"] = api_key.strip()
-        elif p == "claude":
-            data["anthropic_api_key"] = api_key.strip()
-    if base_url:
-        data[f"{p}_base_url"] = base_url.strip()
-        if p == "ollama":
-            data["llm_url"] = base_url.strip()
-            data["llm_model"] = model.strip()
+    data, corrupt = _read_config_file()
+    if corrupt:
+        print(f"[Config] {CONFIG_FILE.name} was unreadable — rewriting it.")
+
+    data["ai_provider"] = chosen
+    data["ai_model"] = _providers.resolve_model(chosen, model)
+
+    if api_key and api_key.strip():
+        data[_providers.key_field(chosen)] = api_key.strip()
+    if base_url and base_url.strip():
+        data[f"{chosen}_base_url"] = base_url.strip()
+
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    return data
+
+
+def set_ai_model(model: str) -> str:
+    """Change only the model, keeping provider and key. Returns what was stored."""
+    from core import providers as _providers
+
+    data, _ = _read_config_file()
+    provider = _providers.normalise(data.get("ai_provider"))
+    chosen = _providers.resolve_model(provider, model)
+    data["ai_provider"] = provider
+    data["ai_model"] = chosen
+    ensure_config_dir()
+    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    return chosen
+
+
+def forget_key(provider: str) -> None:
+    """Remove one provider's stored key (used when switching providers)."""
+    from core import providers as _providers
+
+    data, _ = _read_config_file()
+    data.pop(_providers.key_field(provider), None)
+    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+
+def save_ai_provider(provider: str, model: str = "", api_key: str = "",
+                     base_url: str = "") -> None:
+    """Deprecated alias — kept so an old plugin import does not break."""
+    save_ai_choice(provider, model, api_key, base_url)
 
 # The strings the shipped example file and the setup screen use, plus the shapes
 # people type by hand. A key that matches one of these is not a key: accepting it

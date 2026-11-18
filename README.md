@@ -83,9 +83,28 @@ OpenCode Zen or a local Ollama, since it stores each provider's key under its ow
 
 ### 4. Launch
 
-```bash
-python main.py
+```bat
+ultron
 ```
+
+`ultron.bat` lives in the repository root. It uses `.venv\Scripts\python.exe` when that exists
+and falls back to `python` on PATH, so it works from a plain clone as well as from an installed
+virtual environment. To use the command from any directory, add this folder to `PATH` once:
+
+```bat
+setx PATH "%PATH%;C:\path\to\Ultron"
+```
+
+| Command | What it does |
+|---|---|
+| `ultron` | Start with the provider and model you last chose |
+| `ultron --pick` | Start and open the AI MODEL panel |
+| `ultron --provider ollama --model llama3.2` | This session only — nothing is saved |
+| `ultron --doctor` | Check the environment and exit (works even when the app cannot start) |
+
+Changing the model later needs no restart: press **◈ AI MODEL** in the HUD. Gemini holds a live
+voice session, so switching to or from it reconnects; every other provider picks the new model up
+on your next sentence.
 
 First launch drops you into the setup screen (name, colour, voice). After that, press the
 hotkey to talk, or type in the input bar.

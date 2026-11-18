@@ -13,6 +13,8 @@ from pathlib import Path
 
 import psutil
 
+from core.providers import PROVIDERS as PROVIDER_INFO
+
 if platform.system() == "Windows":
     _WIN_HIDE: dict = {"creationflags": subprocess.CREATE_NO_WINDOW}
 else:
@@ -1481,147 +1483,9 @@ class _CameraPreview(QWidget):
         self._timer.start(6_000)   # auto-dismiss after 6 s
 
 
-PROVIDER_INFO = {
-    "gemini": {
-        "name": "Google Gemini",
-        "models": [
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-live-preview",
-            "gemini-2.5-pro",
-        ],
-        "default_model": "gemini-2.5-flash",
-        "key_label": "GEMINI API KEY",
-        "key_placeholder": "AIzaSy...",
-        "has_url": False,
-        "default_url": "",
-    },
-    "ollama": {
-        "name": "Ollama (Local / Offline)",
-        "models": [
-            "llama3.2",
-            "llama3.3",
-            "deepseek-r1",
-            "qwen2.5",
-            "mistral",
-            "phi4",
-            "gemma2",
-            "codellama",
-        ],
-        "default_model": "llama3.2",
-        "key_label": "API KEY (OPTIONAL)",
-        "key_placeholder": "Leave blank for local Ollama",
-        "has_url": True,
-        "url_label": "OLLAMA SERVER URL",
-        "default_url": "http://localhost:11434",
-    },
-    "gpt": {
-        "name": "OpenAI (GPT)",
-        "models": [
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-4.5-preview",
-            "o3-mini",
-            "o1",
-            "gpt-4-turbo",
-        ],
-        "default_model": "gpt-4o",
-        "key_label": "OPENAI API KEY",
-        "key_placeholder": "sk-proj-...",
-        "has_url": False,
-        "default_url": "https://api.openai.com/v1",
-    },
-    "nvidia_nim": {
-        "name": "NVIDIA NIM",
-        "models": [
-            "meta/llama-3.3-70b-instruct",
-            "deepseek-ai/deepseek-r1",
-            "meta/llama-3.1-405b-instruct",
-            "nvidia/nemotron-4-340b-instruct",
-            "mistralai/mistral-large-2-instruct",
-        ],
-        "default_model": "meta/llama-3.3-70b-instruct",
-        "key_label": "NVIDIA NIM API KEY",
-        "key_placeholder": "nvapi-...",
-        "has_url": True,
-        "url_label": "NIM BASE URL",
-        "default_url": "https://integrate.api.nvidia.com/v1",
-    },
-    "opencode_zen": {
-        "name": "OpenCode Zen",
-        "models": [
-            "opencode/zen-coder-34b",
-            "qwen/qwen-2.5-coder-32b-instruct",
-            "deepseek/deepseek-coder",
-            "meta-llama/llama-3.3-70b-instruct",
-        ],
-        "default_model": "opencode/zen-coder-34b",
-        "key_label": "OPENCODE ZEN API KEY",
-        "key_placeholder": "sk-...",
-        "has_url": True,
-        "url_label": "BASE URL",
-        "default_url": "https://api.opencode.zen/v1",
-    },
-    "claude": {
-        "name": "Anthropic Claude",
-        "models": [
-            "claude-3-7-sonnet-20250219",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-haiku-20241022",
-            "claude-3-opus-20240229",
-        ],
-        "default_model": "claude-3-7-sonnet-20250219",
-        "key_label": "ANTHROPIC API KEY",
-        "key_placeholder": "sk-ant-...",
-        "has_url": False,
-        "default_url": "https://api.anthropic.com/v1",
-    },
-    "deepseek": {
-        "name": "DeepSeek",
-        "models": [
-            "deepseek-chat",
-            "deepseek-reasoner",
-        ],
-        "default_model": "deepseek-chat",
-        "key_label": "DEEPSEEK API KEY",
-        "key_placeholder": "sk-...",
-        "has_url": True,
-        "url_label": "DEEPSEEK BASE URL",
-        "default_url": "https://api.deepseek.com",
-    },
-    "groq": {
-        "name": "Groq (Ultra-Fast)",
-        "models": [
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-            "deepseek-r1-distill-llama-70b",
-            "mixtral-8x7b-32768",
-        ],
-        "default_model": "llama-3.3-70b-versatile",
-        "key_label": "GROQ API KEY",
-        "key_placeholder": "gsk_...",
-        "has_url": False,
-        "default_url": "https://api.groq.com/openai/v1",
-    },
-    "openrouter": {
-        "name": "OpenRouter / Custom",
-        "models": [
-            "meta-llama/llama-3.3-70b-instruct",
-            "anthropic/claude-3.5-sonnet",
-            "deepseek/deepseek-r1",
-            "google/gemini-2.5-flash",
-            "openai/gpt-4o",
-        ],
-        "default_model": "meta-llama/llama-3.3-70b-instruct",
-        "key_label": "API KEY",
-        "key_placeholder": "sk-or-...",
-        "has_url": True,
-        "url_label": "BASE URL",
-        "default_url": "https://openrouter.ai/api/v1",
-    },
-}
+# The provider catalogue lives in core/providers.py: the setup screen, the
+# settings panel and the AI client all read one list, so the UI can never
+# offer a provider the client cannot speak to.
 
 
 class SetupOverlay(QWidget):
@@ -2655,6 +2519,221 @@ class AudioDeviceOverlay(_HudOverlay):
             self.picked.emit()
 
 
+class AiModelOverlay(_HudOverlay):
+    """Choose which model answers, and where it comes from.
+
+    This is the panel `ultron --pick` opens and the AI MODEL button shows. It is
+    deliberately separate from SetupOverlay: that one is the first-run gate and
+    writes a whole new config, whereas changing a model mid-relationship should
+    keep everything else exactly where it is.
+
+    What Apply does is decided by core.providers.apply_choice(), not here — the
+    panel only renders that decision, so the rule (Gemini Live has to reconnect,
+    everything else changes on the next sentence) is testable without Qt.
+    """
+
+    applied = pyqtSignal(str, bool)      # message, reconnected
+
+    _OW = 470
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from core import providers as P
+        from memory.config_manager import get_ai_provider, get_ai_model, load_api_keys
+
+        cfg            = load_api_keys()
+        self._start_p  = P.normalise(get_ai_provider())
+        self._start_m  = get_ai_model()
+
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            AiModelOverlay {{
+                background: rgba(0, 6, 10, 245);
+                border: 1px solid {C.BORDER_B};
+            }}
+        """)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 16, 20, 16)
+        lay.setSpacing(6)
+
+        def _lbl(txt, size=9, bold=False, color=C.PRI,
+                 align=Qt.AlignmentFlag.AlignLeft):
+            w = QLabel(txt)
+            w.setAlignment(align)
+            w.setFont(QFont("Courier New", size,
+                            QFont.Weight.Bold if bold else QFont.Weight.Normal))
+            w.setStyleSheet(f"color: {color}; background: transparent;")
+            w.setWordWrap(True)
+            return w
+
+        self._title = _lbl("◈  AI MODEL", 11, True)
+        lay.addWidget(self._title)
+
+        # What is running right now, in one line, so the panel answers the
+        # question people actually open it with.
+        self._current = _lbl(f"Now: {P.label(self._start_p)} — {self._start_m}",
+                             8, color=C.TEXT_DIM)
+        lay.addWidget(self._current)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER}; margin: 3px 0;")
+        lay.addWidget(sep)
+
+        combo_css = (
+            f"QComboBox {{ background: #000d12; color: {C.TEXT};"
+            f" border: 1px solid {C.BORDER}; border-radius: 3px; padding: 4px 8px; }}"
+            f"QComboBox:hover {{ border-color: {C.BORDER_B}; }}"
+            f"QComboBox QAbstractItemView {{ background: #000d12; color: {C.TEXT};"
+            f" selection-background-color: {C.PRI_GHO}; border: 1px solid {C.BORDER}; }}"
+        )
+        field_css = (
+            f"QLineEdit {{ background: #000d12; color: {C.TEXT};"
+            f" border: 1px solid {C.BORDER}; border-radius: 3px; padding: 4px 8px; }}"
+            f"QLineEdit:focus {{ border-color: {C.PRI}; }}"
+        )
+
+        lay.addWidget(_lbl("PROVIDER", 8, color=C.TEXT_DIM))
+        self._provider = QComboBox()
+        self._provider.setFont(QFont("Courier New", 9))
+        self._provider.setFixedHeight(30)
+        self._provider.setStyleSheet(combo_css)
+        for key, info in P.PROVIDERS.items():
+            self._provider.addItem(info["name"], key)
+        idx = self._provider.findData(self._start_p)
+        self._provider.setCurrentIndex(idx if idx >= 0 else 0)
+        self._provider.currentIndexChanged.connect(self._on_provider_changed)
+        lay.addWidget(self._provider)
+
+        lay.addWidget(_lbl("MODEL — pick one, or type any name", 8, color=C.TEXT_DIM))
+        self._model = QComboBox()
+        self._model.setEditable(True)          # a menu, not a cage
+        self._model.setFont(QFont("Courier New", 9))
+        self._model.setFixedHeight(30)
+        self._model.setStyleSheet(combo_css)
+        self._model.lineEdit().setStyleSheet(f"color: {C.TEXT}; background: #000d12;")
+        lay.addWidget(self._model)
+
+        self._key_label = _lbl("", 8, color=C.TEXT_DIM)
+        lay.addWidget(self._key_label)
+        self._key = QLineEdit()
+        self._key.setFont(QFont("Courier New", 9))
+        self._key.setFixedHeight(30)
+        self._key.setStyleSheet(field_css)
+        self._key.setEchoMode(QLineEdit.EchoMode.Password)
+        lay.addWidget(self._key)
+
+        self._url_label = _lbl("", 8, color=C.TEXT_DIM)
+        lay.addWidget(self._url_label)
+        self._url = QLineEdit()
+        self._url.setFont(QFont("Courier New", 9))
+        self._url.setFixedHeight(30)
+        self._url.setStyleSheet(field_css)
+        lay.addWidget(self._url)
+
+        # The one line that explains the difference between the two providers
+        # people switch between most, before they switch.
+        self._note = _lbl("", 7, color=C.TEXT_DIM)
+        lay.addWidget(self._note)
+
+        row = QHBoxLayout(); row.setSpacing(8)
+        ok = QPushButton("▸  APPLY")
+        ok.setFixedHeight(32)
+        ok.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        ok.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {C.PRI};
+                border: 1px solid {C.PRI_DIM}; border-radius: 3px; }}
+            QPushButton:hover {{ background: {C.PRI_GHO}; border-color: {C.PRI}; }}
+        """)
+        ok.clicked.connect(self._apply)
+        row.addWidget(ok)
+
+        close = QPushButton("CLOSE")
+        close.setFixedHeight(32)
+        close.setFont(QFont("Courier New", 9))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {C.TEXT_MED};
+                border: 1px solid {C.BORDER}; border-radius: 3px; }}
+            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+        """)
+        close.clicked.connect(self.hide)
+        row.addWidget(close)
+        lay.addLayout(row)
+
+        self._state = _lbl("", 8, color=C.PRI_DIM)
+        lay.addWidget(self._state)
+
+        self._cfg = cfg
+        self._on_provider_changed()
+
+    def _on_provider_changed(self, *_):
+        """Refill the model list and the fields that only some providers use."""
+        from core import providers as P
+
+        key = self._provider.currentData()
+        info = P.get(key)
+
+        current_model = self._model.currentText().strip()
+        keep = current_model if key == self._start_p and current_model else ""
+        self._model.clear()
+        self._model.addItems(P.models(key))
+        self._model.setCurrentText(keep or P.default_model(key))
+
+        # A key field only where a key is needed; the stored one is never
+        # printed back — the field is for replacing it.
+        needs_key = P.needs_key(key)
+        self._key_label.setVisible(needs_key)
+        self._key.setVisible(needs_key)
+        if needs_key:
+            stored = str(self._cfg.get(P.key_field(key)) or "").strip()
+            self._key_label.setText(
+                f"{info.get('key_label', 'API KEY')} — "
+                + ("stored, type to replace" if stored else "not set yet"))
+            self._key.setPlaceholderText(info.get("key_placeholder", ""))
+
+        needs_url = P.needs_url(key)
+        self._url_label.setVisible(needs_url)
+        self._url.setVisible(needs_url)
+        if needs_url:
+            self._url_label.setText(info.get("url_label", "BASE URL"))
+            self._url.setText(str(self._cfg.get(f"{key}_base_url") or P.default_url(key)))
+
+        if P.is_realtime(key):
+            self._note.setText("Gemini holds a live voice session — applying reconnects it.")
+        else:
+            self._note.setText("Spoken through the local speech loop — no live session.")
+        self.adjustSize()
+
+    def _apply(self):
+        from core import providers as P
+        from memory.config_manager import save_ai_choice
+
+        provider = self._provider.currentData()
+        model    = self._model.currentText().strip()
+        key      = self._key.text().strip()
+        url      = self._url.text().strip()
+
+        decision = P.apply_choice(provider, model, self._start_p)
+        if not decision["ok"]:
+            self._state.setStyleSheet(f"color: {C.RED}; background: transparent;")
+            self._state.setText(decision["message"])
+            return
+
+        save_ai_choice(provider, decision["model"], api_key=key, base_url=url)
+        self._state.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        self._state.setText(decision["message"])
+        self._current.setText(f"Now: {P.label(provider)} — {decision['model']}")
+        self._start_p, self._start_m = provider, decision["model"]
+
+        from memory.config_manager import load_api_keys
+        self._cfg = load_api_keys()
+
+        self.applied.emit(decision["message"], decision["reconnect"])
+        if decision["reconnect"]:
+            self.hide()
+
+
 class TelegramOverlay(_HudOverlay):
     """Setup and control the Telegram Remote Control Bot."""
 
@@ -3627,6 +3706,7 @@ class MainWindow(QMainWindow):
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
+    _ai_model_sig   = pyqtSignal()           # open the AI MODEL panel from any thread
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
     _cam_stream_sig = pyqtSignal(bool)       # True=start live stream, False=stop
     _cam_frame_sig  = pyqtSignal(bytes)      # live camera frame → HUD area
@@ -3915,6 +3995,7 @@ class MainWindow(QMainWindow):
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
         self._reconfig_sig.connect(self._show_setup)
+        self._ai_model_sig.connect(self._open_ai_model)
         self._camera_sig.connect(self._show_camera_frame)
         self._confirm_sig.connect(self._show_confirm_banner)
         self._confirm_hide_sig.connect(self._hide_confirm_banner)
@@ -4933,6 +5014,14 @@ class MainWindow(QMainWindow):
         telegram_btn.clicked.connect(self._open_telegram_setup)
         lay.addWidget(telegram_btn)
 
+        ai_btn = QPushButton("◈  AI MODEL")
+        ai_btn.setFixedHeight(30)
+        ai_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        ai_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ai_btn.setStyleSheet(_BTN_STYLE_PRI)
+        ai_btn.clicked.connect(self._open_ai_model)
+        lay.addWidget(ai_btn)
+
         sc_btn = QPushButton("⊞  CREATE DESKTOP SHORTCUT")
         sc_btn.setFixedHeight(26)
         sc_btn.setFont(QFont("Courier New", 7))
@@ -5648,6 +5737,21 @@ class MainWindow(QMainWindow):
         self._close_setup()
         self._show_setup()
 
+    # ── AI model panel ───────────────────────────────────────────────────────
+
+    def _open_ai_model(self):
+        ov = AiModelOverlay(parent=self.centralWidget())
+        ov.applied.connect(self._on_ai_model_applied)
+        self._centre_overlay(ov)
+        self._ai_overlay = ov            # keep a reference so it isn't GC'd
+
+    def _on_ai_model_applied(self, message: str, reconnect: bool):
+        self._log.append_log(f"SYS: {message}")
+        # Only Gemini Live holds the model inside an open audio stream; the
+        # rest pick the new one up per utterance, so there is nothing to do.
+        if reconnect and self.on_ai_provider_change:
+            self.on_ai_provider_change()
+
     def _open_remote(self):
         if not self.on_remote_clicked:
             self._log.append_log("SYS: Dashboard not running — remote unavailable.")
@@ -6353,35 +6457,23 @@ class MainWindow(QMainWindow):
         for transient in ("provider", "model"):
             current.pop(transient, None)
 
-        if provider == "gemini":
-            current["gemini_api_key"] = key
-        elif provider == "ollama":
-            current["llm_url"] = url or "http://localhost:11434"
-            current["llm_model"] = model
-        elif provider == "gpt":
-            current["openai_api_key"] = key
-            if url: current["openai_base_url"] = url
-        elif provider == "nvidia_nim":
-            current["nvidia_api_key"] = key
-            current["nvidia_base_url"] = url or "https://integrate.api.nvidia.com/v1"
-        elif provider == "opencode_zen":
-            current["opencode_api_key"] = key
-            current["opencode_base_url"] = url or "https://api.opencode.zen/v1"
-        elif provider == "claude":
-            current["anthropic_api_key"] = key
-        elif provider == "deepseek":
-            current["deepseek_api_key"] = key
-            current["deepseek_base_url"] = url or "https://api.deepseek.com"
-        elif provider == "groq":
-            current["groq_api_key"] = key
-        elif provider == "openrouter":
-            current["openrouter_api_key"] = key
-            current["openrouter_base_url"] = url or "https://openrouter.ai/api/v1"
-
+        # Write the surrounding settings first, then let save_ai_choice() do the
+        # provider/model/key. In the other order the key it had just stored was
+        # overwritten by this older `current` snapshot.
         API_FILE.write_text(
             json.dumps(current, indent=4),
             encoding="utf-8",
         )
+
+        # One writer for the provider/model/key choice: the setup screen, the
+        # AI MODEL panel and the CLI all go through save_ai_choice(), so the file
+        # cannot end up with a provider stored under one name and read under
+        # another.
+        from memory.config_manager import save_ai_choice
+        save_ai_choice(provider, model, api_key=key, base_url=url)
+        current = _read_full_config()          # reflect what was actually saved
+        provider = current.get("ai_provider", provider)
+        model = current.get("ai_model", model)
         self._ready = True
         if self._overlay:
             self._overlay.hide()
@@ -6627,6 +6719,10 @@ class UltronUI:
         """
         self._win._review_sig.emit(str(title or ""), str(summary or ""),
                                    list(findings or []), list(unclear or []))
+
+    def open_ai_model_panel(self):
+        """Thread-safe: open the AI MODEL panel (used by `ultron --pick`)."""
+        self._win._ai_model_sig.emit()
 
     def prompt_reconfig(self):
         """Thread-safe: show the API key setup overlay (e.g. after an auth error)."""

@@ -544,3 +544,80 @@ does.
   the pair cannot be used.
 
 Suite: 131 tests.
+
+---
+
+# Pass 9 — one provider catalogue, an `ultron` command, and a model panel
+
+Planned first (`docs/PLAN.md`) from four answers: a launcher script rather than a package, launch
+with the last-used model, non-Gemini providers speaking through the local voice loop, curated
+model lists with a typable custom name, and all eight backlog items.
+
+## Three lists of providers became one
+
+`ui.py` had the catalogue, `memory/config_manager.py` had a key-field map, and
+`core/llm_client.py` had the branches. `core/providers.py` now holds all of it — nine providers,
+their curated models, defaults, key fields, docs links, aliases, and the realtime set — and
+`ui.py` imports it. `save_ai_choice()` is the only writer of `ai_provider`; `set_ai_model()` and
+`forget_key()` cover the rest, and `save_ai_provider()` remains as a deprecated alias.
+
+The drift this removes was not hypothetical: the setup screen stored `anthropic_api_key` for
+Claude while the reader derived `claude_api_key`, so three providers could never be configured
+(pass 7), and `save_ai_provider()` had no callers at all — nothing could change the provider after
+the first run without hand-editing JSON.
+
+## `ultron` — and a doctor that works in a broken environment
+
+`ultron.bat` (Windows, first-class) and `ultron` (POSIX, so the same command exists everywhere)
+prefer `.venv` and fall back to `python`, forward every argument, keep the window open when the
+app exits non-zero, and return the child's exit code.
+
+Four flags: `--provider`, `--model` (session-only — a one-off launch must not rewrite the saved
+choice), `--pick` (opens the AI MODEL panel), `--doctor`.
+
+`--doctor` needed one structural change to be honest: `main.py` imports sounddevice and PyQt6 at
+module level, so on a machine missing PortAudio the *diagnostic* died of the very problem it was
+called to describe — reproduced here, exactly that traceback. The flag is now answered at the top
+of `main.py`, before those imports. Verified in this sandbox, where PortAudio is genuinely absent:
+`./ultron --doctor` produces the full report.
+
+## Model selection in the HUD
+
+New **◈ AI MODEL** panel: the current provider and model, a provider list, an editable model list
+(curated suggestions, any typed name accepted), key and URL fields only where the provider needs
+them, and a line explaining which voice path that provider uses. The stored key is never printed
+back — the field is for replacing it.
+
+Apply's behaviour lives in `core/providers.apply_choice()`, not in the widget, so the rule is
+tested without Qt: switching to or from Gemini reconnects (the live session carries the model),
+two non-Gemini providers do not (they are asked per utterance). The panel reports the decision
+rather than deciding it.
+
+## Multi-provider voice, said out loud
+
+Live audio is a property of the *model*, not of Gemini alone: Gemini with a normal model already
+ran the same local loop as everyone else. What was missing was honesty and a placeholder — the
+loop was told `"default"` as a model name whenever none was set. `providers.resolve_model()` now
+turns every empty or placeholder value into the provider's real default, and the session logs
+which path is running (`Voice: local speech loop — mic → OLLAMA (llama3.2) → neural TTS`).
+
+An unreachable Ollama now says *"Ollama is not reachable at http://localhost:11434. Start it
+(ollama serve) or switch provider in the AI MODEL panel."* instead of surfacing a
+ConnectionError.
+
+## Bug found while wiring it
+
+`_on_setup_done()` read the config file, wrote it, and only then stored the key — so the write
+that came second was based on a snapshot taken before the first, and the provider's key field was
+erased. The order is now: surrounding settings first, `save_ai_choice()` last, then re-read.
+
+## Guards added
+
+- `tests/test_providers.py` (34) — catalogue completeness, catalogue vs `llm_client` branches via
+  AST, aliases, model resolution, session overrides, the single writer (including the corrupt
+  config path), the CLI parser, `apply_choice`'s reconnect rule, and the Ollama message.
+- `tests/test_launcher.py` (11) — both launchers forward arguments and prefer the venv, the window
+  stays open on failure, `--doctor` is answered before `sounddevice` is imported, and a real
+  subprocess run of it produces a report with no traceback.
+
+Suite: 176 tests.
