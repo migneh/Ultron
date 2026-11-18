@@ -682,3 +682,26 @@ test in `tests/test_backlog.py` (26). Suite: 201 tests.
 **Unverified, by necessity:** the PowerShell OCR script has never been run (no Windows), and
 `private: true` has never opened a browser (no Playwright/Chromium here). Both are implemented and
 reviewed, not exercised. Treat them as "written, not proven".
+
+# Pass 9, part three — checking the wiring without Qt
+
+The AI MODEL button was wired in `MainWindow`, but Qt could not be started here to prove it. A
+wrong guess (the handler on a sibling widget class) would have raised `AttributeError` on the first
+click and nothing earlier, so the wiring is now checked by reading the file, in
+`tests/test_ui_wiring.py` (9 tests):
+
+- every `self._x.connect(self._y)` in `ui.py` names a method that exists — private names only,
+  skipping widgets assigned in `__init__` and inherited Qt slots like `.hide`;
+- the AI MODEL button and its handler are in the same class body (`MainWindow`), not merely
+  somewhere in the file;
+- `on_ai_provider_change` is initialised before `if reconnect and self.on_ai_provider_change`;
+- `_ai_model_sig` exists, is connected, and the overlay keeps a strong reference
+  (`self._ai_overlay`) so it is not garbage-collected mid-click;
+- no `UltronUI` wrapper emits a signal `MainWindow` never declares;
+- the panel reads `core.providers` and does not carry a second copy of the catalogue.
+
+The tests were checked against a deliberately broken copy of `ui.py` (`_open_ai_model_TYPO`): the
+handler test failed and named the line. They are not a substitute for opening the window — nothing
+here claims the GUI was rendered.
+
+Suite: 211 tests, `compileall` clean, ruff bug-rules clean.
