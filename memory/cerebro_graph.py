@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import collections
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 import os
@@ -60,9 +61,17 @@ def _get_db() -> sqlite3.Connection:
             CREATE TABLE IF NOT EXISTS embeddings (
                 node_id INTEGER PRIMARY KEY,
                 vector_json TEXT,
+                vocab_sig TEXT,
                 FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
             )
         """)
+        # Graphs created before vocabulary signatures existed get the column added
+        # in place; their vectors carry a NULL signature and are re-embedded the
+        # first time semantic_query() touches them.
+        try:
+            conn.execute("ALTER TABLE embeddings ADD COLUMN vocab_sig TEXT")
+        except sqlite3.OperationalError:
+            pass          # column already present
         conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_entity ON nodes(entity)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(source_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_tgt ON edges(target_id)")
@@ -93,6 +102,18 @@ def _build_vector(text: str, vocab: dict[str, int]) -> np.ndarray:
     if norm > 1e-6:
         vec = vec / norm
     return vec
+
+
+def _vocab_signature(vocab: dict[str, int]) -> str:
+    """Fingerprint the exact token -> index mapping a vector was built against.
+
+    The corpus vocabulary is derived from whatever nodes exist right now (top 800
+    tokens by frequency), so every insert can renumber dimensions. Two vectors are
+    only comparable if they were built against the same mapping — this signature
+    is how a stale vector is recognised instead of silently scoring garbage.
+    """
+    ordered = "\n".join(sorted(vocab, key=vocab.get))
+    return hashlib.sha1(ordered.encode("utf-8")).hexdigest()
 
 
 def _get_corpus_vocab(conn: sqlite3.Connection) -> dict[str, int]:
@@ -148,13 +169,34 @@ def upsert_node(
             text_rep = f"{clean_entity} {clean_label} {props_json}"
             vec = _build_vector(text_rep, vocab)
             cur.execute("""
-                INSERT OR REPLACE INTO embeddings (node_id, vector_json)
-                VALUES (?, ?)
-            """, (node_id, json.dumps(vec.tolist())))
+                INSERT OR REPLACE INTO embeddings (node_id, vector_json, vocab_sig)
+                VALUES (?, ?, ?)
+            """, (node_id, json.dumps(vec.tolist()), _vocab_signature(vocab)))
 
         return node_id
     finally:
         conn.close()
+
+
+def _ensure_node(entity: str) -> int:
+    """Return the id of a node, creating a bare one only if it does not exist.
+
+    Deliberately NOT upsert_node(): that refreshes label/properties from its
+    arguments, so calling it from link_entities() — which has no payload to give —
+    would blank the label and properties of an entity the user just taught it.
+    Linking two things must add an edge, never erase a memory.
+    """
+    clean_entity = (entity or "").strip().lower()
+    if not clean_entity:
+        raise ValueError("Entity identifier cannot be empty.")
+    conn = _get_db()
+    try:
+        row = conn.execute("SELECT id FROM nodes WHERE entity = ?", (clean_entity,)).fetchone()
+        if row:
+            return row[0]
+    finally:
+        conn.close()
+    return upsert_node(clean_entity)
 
 
 def link_entities(
@@ -165,8 +207,8 @@ def link_entities(
     properties: dict | None = None
 ) -> str:
     """Forms a weighted, directed semantic edge between two entity nodes."""
-    s_id = upsert_node(source_entity)
-    t_id = upsert_node(target_entity)
+    s_id = _ensure_node(source_entity)
+    t_id = _ensure_node(target_entity)
 
     rel_clean = (relation or "related_to").strip().lower()
     props_json = json.dumps(properties or {}, ensure_ascii=False)
@@ -195,21 +237,45 @@ def semantic_query(query: str, top_k: int = 5, depth: int = 1) -> list[dict]:
         if not vocab:
             return []
 
+        sig = _vocab_signature(vocab)
         q_vec = _build_vector(query, vocab)
         cur = conn.cursor()
 
-        cur.execute("SELECT node_id, vector_json FROM embeddings")
+        cur.execute("""
+            SELECT e.node_id, e.vector_json, e.vocab_sig, n.entity, n.label, n.properties
+            FROM embeddings e
+            JOIN nodes n ON n.id = e.node_id
+        """)
         emb_rows = cur.fetchall()
 
         scores = []
-        for n_id, v_json in emb_rows:
+        repaired: list[tuple[str, str, int]] = []
+        for n_id, v_json, v_sig, ent, lbl, props_str in emb_rows:
             try:
                 v = np.array(json.loads(v_json), dtype=np.float32)
-                # Cosine similarity
-                sim = float(np.dot(q_vec, v))
-                scores.append((n_id, sim))
             except Exception:
-                continue
+                v = None
+
+            # Self-heal: a vector is only comparable if it was built against the
+            # current vocabulary. Inserting new nodes reshapes that vocabulary,
+            # which used to make every older memory score 0.0 or blow up on
+            # np.dot and get skipped — the graph "forgot" as it grew. Rebuild the
+            # vector from the node's own text and persist the repair, so each node
+            # is re-embedded at most once per vocabulary change.
+            if v is None or v_sig != sig or v.shape[0] != len(vocab):
+                v = _build_vector(f"{ent} {lbl} {props_str}", vocab)
+                repaired.append((json.dumps(v.tolist()), sig, n_id))
+
+            # Cosine similarity (both sides are L2-normalised)
+            sim = float(np.dot(q_vec, v))
+            scores.append((n_id, sim))
+
+        if repaired:
+            with conn:
+                cur.executemany(
+                    "UPDATE embeddings SET vector_json = ?, vocab_sig = ? WHERE node_id = ?",
+                    repaired,
+                )
 
         scores.sort(key=lambda t: t[1], reverse=True)
         top_nodes = scores[:top_k]

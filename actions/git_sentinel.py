@@ -69,8 +69,21 @@ def git_status(repo_dir: Path) -> str:
         return f"Repository '{repo_dir.name}' is clean. Working tree matches HEAD."
 
     header = lines[0]  # ## branch...origin/branch [ahead 1]
-    branch_match = re.search(r"^##\s+([^\s\.]+)", header)
-    current_branch = branch_match.group(1) if branch_match else "HEAD (detached)"
+    # The branch name cannot be scraped with one regex: git writes
+    #   ## No commits yet on master      (repo with no commits)
+    #   ## HEAD (no branch)              (detached)
+    #   ## feature/v1.2...origin/...     (branch may contain dots and slashes)
+    # The old pattern `[^\s\.]+` reported "No" for a fresh repo and truncated a
+    # dotted branch name to "feature/v1".
+    head = header[3:].strip() if header.startswith("## ") else header.strip()
+    if head.startswith("No commits yet on "):
+        current_branch = head[len("No commits yet on "):].strip() or "HEAD (detached)"
+    elif head.startswith("Initial commit on "):
+        current_branch = head[len("Initial commit on "):].strip() or "HEAD (detached)"
+    elif not head or head.startswith("HEAD"):
+        current_branch = "HEAD (detached)"
+    else:
+        current_branch = head.split("...")[0].split(" ")[0].strip() or "HEAD (detached)"
 
     ahead_match = re.search(r"\[ahead\s+(\d+)\]", header)
     behind_match = re.search(r"\[behind\s+(\d+)\]", header)

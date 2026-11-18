@@ -18,7 +18,7 @@ WHAT IT ACCEPTS
 
 SOUND IS OFF UNTIL ASKED FOR
     A soundtrack talking over the assistant is the one way this feature could
-    make JARVIS worse rather than better, and the microphone is open while it
+    make ULTRON worse rather than better, and the microphone is open while it
     plays. So it starts muted, and the user turns sound on — from the button in
     the video header, or by saying so. Closing it works both ways too.
 """
@@ -218,7 +218,7 @@ def video_player(parameters: dict = None, response=None, player=None,
     # answer — the fast clients came back with zero usable formats.
     #
     # So the seconds stay, and what changes is where the user spends them:
-    # listening to JARVIS say it is coming, instead of watching nothing happen.
+    # listening to ULTRON say it is coming, instead of watching nothing happen.
     # The same shape whatsapp_call uses, and for the same reason.
     threading.Thread(target=_play_youtube, args=(player, source, _begin_open()),
                      daemon=True, name="video-open").start()
@@ -275,14 +275,15 @@ def _say(player, instruction: str) -> None:
 TOOL = {
     "name": "video_player",
     "description": (
-        "If user wants to open a video on YouTube, he will tell you that specifically"
-        "If user wants to play a video, then he wants to call this feature"
+        "If the user wants to open a video on YouTube, they will say so "
+        "specifically. If the user wants to play a video, this is the feature "
+        "to call. "
         "Plays a VIDEO on the assistant's own display, where the avatar "
         "normally is — and stops it, mutes it or unmutes it. Use whenever the "
         "user wants to WATCH something on screen: 'play the new Dune trailer', "
-        "'şu videoyu oynat', 'play C:/clips/holiday.mp4', 'put that YouTube "
-        "video on the screen', 'stop the video', 'videoyu kapat', 'turn the "
-        "sound on', 'sesi aç', 'mute it'. Accepts a local file path, a direct "
+        "'play C:/clips/holiday.mp4', 'put that YouTube "
+        "video on the screen', 'stop the video', 'turn the "
+        "sound on', 'mute it'. Accepts a local file path, a direct "
         "video URL, a YouTube link, or a description to search YouTube for. "
         "Video always starts MUTED — only call action='unmute' when the user "
         "actually asks to hear it. "

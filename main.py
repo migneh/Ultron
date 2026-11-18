@@ -35,6 +35,7 @@ for _stream in ("stdout", "stderr"):
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
+import os
 import re
 import threading
 import time
@@ -48,7 +49,8 @@ import sounddevice as sd
 import numpy as np
 from google import genai
 from google.genai import types
-from ui import JarvisUI
+from ui import UltronUI
+from core.persona import address_line, normalize_language, speech_protocol
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
     save_session_summary, pop_last_session,
@@ -59,7 +61,7 @@ from memory.memory_manager import (
 # imported or declared here — they self-describe via a TOOL dict in their own
 # actions/*.py file and are auto-discovered by core.action_loader at startup.
 # Only tools that are tied to live-session state stay inline in this file
-# (screen_process, close_camera, save_memory, manage_monitor, shutdown_jarvis,
+# (screen_process, close_camera, save_memory, manage_monitor, shutdown_ultron,
 # system_status).
 from actions.screen_processor  import _capture_camera, _capture_screen
 from actions.system_monitor    import SystemMonitor, get_system_status
@@ -82,8 +84,10 @@ from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
 from core.viseme               import VisemeStream
+from core.tasks                import spawn
 from core.wake_word            import (
-    WakeWordDetector, is_ready as wake_is_ready, install_and_download as wake_install,
+    WAKE_PHRASE, WakeWordDetector,
+    is_ready as wake_is_ready, install_and_download as wake_install,
 )
 
 # How long the assistant stays awake with no user speech before it auto-sleeps
@@ -300,6 +304,17 @@ def _get_api_key() -> str:
         return ""
 
 
+def _memory_language(memory: dict | None = None) -> str:
+    """The user's configured language (`memory.identity.language`).
+
+    Falls back to English when memory has never been told, so callers never
+    have to handle an empty value themselves.
+    """
+    entry = ((memory or {}).get("identity") or {}).get("language", "")
+    value = entry.get("value", "") if isinstance(entry, dict) else str(entry or "")
+    return normalize_language(value)
+
+
 def _load_system_prompt() -> str:
     try:
         return PROMPT_PATH.read_text(encoding="utf-8")
@@ -312,7 +327,7 @@ def _load_system_prompt() -> str:
 
 _CTRL_RE = re.compile(r"<ctrl\d+>", re.IGNORECASE)
 
-# Transcript chunks shorter than this may legitimately repeat ("evet, evet"),
+# Transcript chunks shorter than this may legitimately repeat ("yes, yes"),
 # so only longer ones are treated as duplicates.
 _REPEAT_MIN = 12
 
@@ -339,7 +354,7 @@ TOOL_DECLARATIONS = [
     # handling is woven into live-session state — vision capture/injection,
     # camera stream, memory writes, the monitor engine, and shutdown. All other
     # tools live in their own action file and are auto-discovered by
-    # core.action_loader (see JarvisLive.__init__).
+    # core.action_loader (see UltronLive.__init__).
     {
         "name": "system_status",
         "description": (
@@ -384,7 +399,7 @@ TOOL_DECLARATIONS = [
         "name": "manage_monitor",
         "description": (
             "Add, remove, or list background monitoring topics. "
-            "JARVIS checks these topics once a day and alerts the user when there is a new development. "
+            "ULTRON checks these topics once a day and alerts the user when there is a new development. "
             "Use 'add' when the user says 'monitor X', 'track X', 'follow X'. "
             "Use 'remove' when the user says 'stop monitoring X'. "
             "Use 'list' when the user asks what is being monitored. "
@@ -406,11 +421,11 @@ TOOL_DECLARATIONS = [
         },
     },
     {
-        "name": "shutdown_jarvis",
+        "name": "shutdown_ultron",
         "description": (
             "Shuts down the assistant completely. "
             "Call this when the user expresses intent to end the conversation, "
-            "close the assistant, say goodbye, or stop Jarvis. "
+            "close the assistant, say goodbye, or stop Ultron. "
             "The user can say this in ANY language."
         ),
         "parameters": {
@@ -540,8 +555,8 @@ def _keep_context_of(exc: BaseException) -> bool:
     return True
 
 
-class JarvisLive:
-    def __init__(self, ui: JarvisUI):
+class UltronLive:
+    def __init__(self, ui: UltronUI):
         self.ui             = ui
         self._asst_name     = "Ultron"   # updated each session from config
         self.session              = None
@@ -672,7 +687,7 @@ class JarvisLive:
             try:
                 self.set_push_to_talk(True)
             except Exception as e:
-                print(f"[JARVIS] ⚠ Push-to-talk unavailable: {e}")
+                print(f"[ULTRON] ⚠ Push-to-talk unavailable: {e}")
         # UI control surface for the Wake Word settings section.
         self.ui.wake_is_ready    = wake_is_ready          # () -> bool
         self.ui.wake_get_state   = self._wake_state       # () -> dict
@@ -720,7 +735,7 @@ class JarvisLive:
         Builds the unified system instruction containing:
         - Current time & date
         - Ultron Identity & Boss address
-        - Hindi & Bilingual Speech protocols
+        - Speech protocols for the user's configured language
         - Memory context
         - Master MCU Ultron prompt with dynamic capabilities and system limits
         Returns (full_instruction_text, all_tool_declarations).
@@ -745,10 +760,10 @@ class JarvisLive:
             f"Use this to calculate exact times for reminders.\n\n"
         )
 
-        _addr = (f"ADDRESS: Always address the user as 'Boss {_user_name}' or 'Boss' ('बॉस' in Hindi)."
-                 if _user_name
-                 else 'ADDRESS: Always address the user as "Boss" (or "बॉस" in Hindi). '
-                      'Never say "sir" like a generic butler; you are Ultron, and the user is your creator and Boss.')
+        # The persona follows the user's own language setting; an English-only
+        # user no longer gets another script injected into every prompt.
+        _lang = _memory_language(memory)
+        _addr = address_line(_user_name, _lang)
         identity_ctx = (
             f"[IDENTITY]\n"
             f"Your name is {self._asst_name}. "
@@ -774,16 +789,10 @@ class JarvisLive:
             ),
         })
 
-        hindi_speech_ctx = (
-            "[HINDI & BILINGUAL SPEECH PROTOCOL]\n"
-            "When the Boss communicates in Hindi or Hinglish:\n"
-            "- Speak in fluent, natural conversational Hindi with the deep, commanding gravitas of Ultron (James Spader MCU persona).\n"
-            "- Address the user strictly as 'बॉस' (Boss).\n"
-            "- Keep technical terms (जैसे 'सिस्टम', 'इंटरनेट', 'स्क्रीन', 'फाइल', 'कमांड', 'प्रोटोकॉल', 'डाउनलोड', 'ब्राउज़र', 'ड्रोन', 'नेटवर्क') natural rather than awkward archaic translations.\n"
-            "- Deliver articulate, powerful sentences with authentic Indian cinematic cadence.\n\n"
-        )
-
-        parts = [time_ctx, identity_ctx, hindi_speech_ctx]
+        parts = [time_ctx, identity_ctx]
+        _speech_ctx = speech_protocol(_lang)
+        if _speech_ctx:
+            parts.append(_speech_ctx)
         if mem_str:
             parts.append(mem_str)
         parts.append(sys_prompt)
@@ -834,7 +843,7 @@ class JarvisLive:
                                 f"Remote directive from Boss via Telegram: {text}\n"
                                 f"Tool '{fn_name}' execution result: {tool_res}\n\n"
                                 f"Report the outcome directly to the Boss in character as Ultron (James Spader MCU persona). "
-                                f"Be concise, chillingly confident, and authoritative. Match the language of the command (English or Hindi)."
+                                f"Be concise, chillingly confident, and authoritative. Match the language of the command."
                             ),
                             system=sys_prompt,
                             provider=provider,
@@ -884,7 +893,7 @@ class JarvisLive:
         return True
 
     def _on_wake_detected(self) -> None:
-        """Called from the detector thread when 'Hey Jarvis' is heard."""
+        """Called from the detector thread when the wake phrase is heard."""
         self.wake(reason="wake word")
 
     def wake(self, reason: str = "wake word") -> None:
@@ -906,7 +915,7 @@ class JarvisLive:
         self._awake = False
         self.set_speaking(False)
         self.ui.set_state("SLEEPING")
-        self.ui.write_log(f"SYS: Sleeping — {reason}. Say 'Hey Jarvis' to wake me.")
+        self.ui.write_log(f"SYS: Sleeping — {reason}. Say '{WAKE_PHRASE}' to wake me.")
 
     async def _run_sleep_watch(self) -> None:
         """Auto-sleep after the configured silence window (wake-word mode only)."""
@@ -958,7 +967,7 @@ class JarvisLive:
 
     def plugin_say(self, instruction: str) -> None:
         """
-        Thread-safe speech channel for plugins: lets a plugin ask JARVIS to
+        Thread-safe speech channel for plugins: lets a plugin ask ULTRON to
         say something short WHILE its run() is still executing (plugins block
         their executor thread, so they can't speak through the tool response
         until they finish). The instruction is injected into the Live session
@@ -1048,9 +1057,9 @@ class JarvisLive:
             return
         # Respect wake-word sleep: a typed command must not be answered while
         # asleep either (the sleep gate is not just for the mic). Wake first with
-        # "Hey Jarvis" or the WAKE NOW button.
+        # the wake phrase or the WAKE NOW button.
         if self._wake_enabled and not self._awake:
-            self.ui.write_log("SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first.")
+            self.ui.write_log(f"SYS: I'm asleep — say '{WAKE_PHRASE}' or tap WAKE NOW first.")
             return
 
         if self.session is not None:
@@ -1292,7 +1301,7 @@ class JarvisLive:
                                 f"Tool '{fn_name}' execution result: {tool_res}\n\n"
                                 f"You already told the Boss ({user_tag}) you were working on it. "
                                 f"Now deliver the final completed result directly to them in natural, human conversational style like handing over what was requested (e.g. 'Here is what you asked for, {user_tag}...', 'Yeh raha {user_tag}...'). "
-                                f"Be concise, chillingly confident, and authoritative as Ultron. Match the language of the user's request (English or Hindi)."
+                                f"Be concise, chillingly confident, and authoritative as Ultron. Match the language of the user's request."
                             ),
                             system=sys_prompt,
                             provider=provider,
@@ -1468,7 +1477,7 @@ class JarvisLive:
             self._ensure_wake_detector()
             self._awake = False
             self.ui.set_state("SLEEPING")
-            self.ui.write_log("SYS: Ultron online — sleeping. Say 'Hey Jarvis' to wake me.")
+            self.ui.write_log(f"SYS: Ultron online — sleeping. Say '{WAKE_PHRASE}' to wake me.")
         else:
             self._awake = True
             self.ui.set_state("ONLINE")
@@ -1660,7 +1669,7 @@ class JarvisLive:
             except Exception as e:
                 return f"Undo error: {e}"
 
-        if target_name == "shutdown_jarvis":
+        if target_name == "shutdown_ultron":
             self.ui.write_log("SYS: Shutdown requested.")
             import threading
             threading.Timer(1.0, lambda: os._exit(0)).start()
@@ -1772,7 +1781,7 @@ class JarvisLive:
             pass
 
     def interrupt(self) -> None:
-        """Stop JARVIS mid-speech: drain queued audio and open mic immediately."""
+        """Stop ULTRON mid-speech: drain queued audio and open mic immediately."""
         self._interrupted = True
         q = self.audio_in_queue
         if q:
@@ -1784,7 +1793,7 @@ class JarvisLive:
                 except Exception:
                     break
             if drained:
-                print(f"[JARVIS] ✋ Interrupted — {drained} audio chunks discarded")
+                print(f"[ULTRON] ✋ Interrupted — {drained} audio chunks discarded")
         self.set_speaking(False)
         # The words we were about to mouth are never going to be spoken now.
         self._visemes.reset()
@@ -1857,7 +1866,7 @@ class JarvisLive:
                 handle=self._resume_handle
             ),
             # Sliding-window compression: session never dies from a full context
-            # window — JARVIS can stay in one conversation for hours
+            # window — ULTRON can stay in one conversation for hours
             context_window_compression=types.ContextWindowCompressionConfig(
                 sliding_window=types.SlidingWindow(),
             ),
@@ -1870,7 +1879,7 @@ class JarvisLive:
             ),
         )
         if self._enhanced_live:
-            # Proactive audio: JARVIS stays silent when speech isn't addressed
+            # Proactive audio: ULTRON stays silent when speech isn't addressed
             # to it (background chatter, talking to someone else in the room).
             # (Affective dialog was dropped: gemini-3.1-flash-live does not
             #  support it, and it never reliably detected tone in practice.
@@ -1941,7 +1950,7 @@ class JarvisLive:
         name = fc.name
         args = dict(fc.args or {})
 
-        print(f"[JARVIS] 🔧 {name}  {args}")
+        print(f"[ULTRON] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
         self.ui.set_active_task(name, details=str(args))
 
@@ -2037,7 +2046,7 @@ class JarvisLive:
                 else:
                     result = "Specify action (add/remove/list) and a topic."
 
-            elif name == "shutdown_jarvis":
+            elif name == "shutdown_ultron":
                 self.ui.write_log("SYS: Shutdown requested.")
                 async def _do_shutdown():
                     await self._save_session_summary()
@@ -2094,7 +2103,7 @@ class JarvisLive:
             self.ui.set_state("LISTENING")
 
 
-        print(f"[JARVIS] 📤 {name} → {str(result)[:80]}")
+        print(f"[ULTRON] 📤 {name} → {str(result)[:80]}")
 
         # A tool that declared itself NON_BLOCKING also says when its answer may
         # re-enter the conversation. Without this the model finishes whatever it
@@ -2127,13 +2136,13 @@ class JarvisLive:
             )
 
     async def _listen_audio(self):
-        print("[JARVIS] 🎤 Mic started")
+        print("[ULTRON] 🎤 Mic started")
         loop = asyncio.get_event_loop()
 
         def callback(indata, frames, time_info, status):
             # ── Wake-word gate ───────────────────────────────────────────────
             # While asleep, the mic audio NEVER goes to Gemini (nothing is
-            # streamed, so JARVIS can't respond to speech not addressed to it and
+            # streamed, so ULTRON can't respond to speech not addressed to it and
             # nothing leaves the machine). Frames are instead handed to the local
             # detector, which runs its model in ITS OWN thread — the cost here is
             # only a queue push, so the audio path is never slowed. When wake word
@@ -2144,19 +2153,19 @@ class JarvisLive:
                     det.feed(indata)
                 return
             with self._speaking_lock:
-                jarvis_speaking = self._is_speaking
+                ultron_speaking = self._is_speaking
 
             # ── Barge-in ─────────────────────────────────────────────────────
-            # While JARVIS talks the mic is not streamed, but it is still worth
+            # While ULTRON talks the mic is not streamed, but it is still worth
             # listening to locally: if the user starts speaking, cut the answer
             # short the way a person would stop when interrupted.
             #
-            # The whole difficulty is echo — on speakers the mic hears JARVIS.
+            # The whole difficulty is echo — on speakers the mic hears ULTRON.
             # So the test is not "is the mic loud" but "is the mic louder than
             # the echo of what we are playing right now", sustained long enough
             # that a cough or a keystroke cannot trigger it.
-            if jarvis_speaking:
-                # Nothing is streamed while JARVIS talks.
+            if ultron_speaking:
+                # Nothing is streamed while ULTRON talks.
                 #
                 # Interrupting by voice used to live here: `EchoGuard` can pick a
                 # user out from under our own echo, and `core/echo.py` still does
@@ -2226,7 +2235,7 @@ class JarvisLive:
             _mic_name = get_input_device()
             _mic_dev  = audio_devices.resolve(_mic_name, "input")
             if _mic_dev is not None:
-                print(f"[JARVIS] 🎤 Input device: {_mic_name}")
+                print(f"[ULTRON] 🎤 Input device: {_mic_name}")
             try:
                 _mic_stream = _open_mic(_mic_dev)
             except Exception as _e:
@@ -2236,18 +2245,18 @@ class JarvisLive:
                 # mean the assistant cannot hear at all.
                 if _mic_dev is None:
                     raise
-                print(f"[JARVIS] ⚠️  Mic '{_mic_name}' failed: {_e} — using default")
+                print(f"[ULTRON] ⚠️  Mic '{_mic_name}' failed: {_e} — using default")
                 self.ui.write_log(
                     f"SYS: Microphone '{_mic_name}' unavailable — using system default."
                 )
                 _mic_stream = _open_mic(None)
 
             with _mic_stream:
-                print("[JARVIS] 🎤 Mic stream open")
+                print("[ULTRON] 🎤 Mic stream open")
                 while True:
                     await asyncio.sleep(0.1)
         except Exception as e:
-            print(f"[JARVIS] ❌ Mic: {e}")
+            print(f"[ULTRON] ❌ Mic: {e}")
             raise
 
     async def _flush_pending_vision(self) -> bool:
@@ -2285,7 +2294,7 @@ class JarvisLive:
         )
 
         if self._vision_cam_active:
-            # Camera: stay busy until JARVIS has finished speaking the answer,
+            # Camera: stay busy until ULTRON has finished speaking the answer,
             # then close the preview.
             self._vision_cam_active    = False
             self._vision_close_pending = True
@@ -2294,7 +2303,7 @@ class JarvisLive:
         return True
 
     async def _receive_audio(self):
-        print("[JARVIS] 👂 Recv started")
+        print("[ULTRON] 👂 Recv started")
         out_buf, in_buf = [], []
 
         try:
@@ -2311,7 +2320,7 @@ class JarvisLive:
                     if _sru is not None:
                         if getattr(_sru, "resumable", False) and getattr(_sru, "new_handle", None):
                             if self._resume_handle is None:
-                                print("[JARVIS] 🔗 Session resumption armed")
+                                print("[ULTRON] 🔗 Session resumption armed")
                             self._resume_handle = _sru.new_handle
 
                     if response.data:
@@ -2406,7 +2415,10 @@ class JarvisLive:
                                 async def _cam_close():
                                     await asyncio.sleep(2.0)
                                     self.ui.stop_camera_stream()
-                                asyncio.create_task(_cam_close())
+                                # spawn, not create_task: a failure here used to be
+                                # reported only at garbage collection, with no hint
+                                # that the camera stayed open.
+                                spawn(_cam_close(), name="camera-close")
 
                     if response.tool_call:
                         fn_responses = []
@@ -2444,17 +2456,17 @@ class JarvisLive:
                         )
                         await self._flush_pending_vision()
         except Exception as e:
-            print(f"[JARVIS] ❌ Recv: {e}")
+            print(f"[ULTRON] ❌ Recv: {e}")
             traceback.print_exc()
             raise
 
     async def _play_audio(self):
-        print("[JARVIS] 🔊 Play started")
+        print("[ULTRON] 🔊 Play started")
 
         _spk_name = get_output_device()
         _spk_dev  = audio_devices.resolve(_spk_name, "output")
         if _spk_dev is not None:
-            print(f"[JARVIS] 🔊 Output device: {_spk_name}")
+            print(f"[ULTRON] 🔊 Output device: {_spk_name}")
 
         def _open_spk(dev):
             st = sd.RawOutputStream(
@@ -2475,7 +2487,7 @@ class JarvisLive:
             # cost the user their voice. Fall back to the default and say so.
             if _spk_dev is None:
                 raise
-            print(f"[JARVIS] ⚠️  Output device '{_spk_name}' failed: {_e} — using default")
+            print(f"[ULTRON] ⚠️  Output device '{_spk_name}' failed: {_e} — using default")
             self.ui.write_log(f"SYS: Speaker '{_spk_name}' unavailable — using system default.")
             stream = _open_spk(None)
 
@@ -2487,7 +2499,7 @@ class JarvisLive:
             lat = float(getattr(stream, "latency", 0.0) or 0.0)
             if 0.0 < lat < 1.0:
                 self._out_latency = lat
-            print(f"[JARVIS] 🔊 Output latency {self._out_latency*1000:.0f} ms "
+            print(f"[ULTRON] 🔊 Output latency {self._out_latency*1000:.0f} ms "
                   f"→ echo tail {(self._out_latency + _TAIL_MARGIN)*1000:.0f} ms")
         except Exception:
             pass
@@ -2531,7 +2543,7 @@ class JarvisLive:
                     except asyncio.QueueEmpty:
                         break
 
-                # Drive the HUD waveform and the avatar's mouth from JARVIS's
+                # Drive the HUD waveform and the avatar's mouth from ULTRON's
                 # own voice. The batch is up to 200 ms long, so we hand over a
                 # *schedule* of 20 ms viseme frames instead of a single averaged
                 # level and let the HUD play it out in step with the audio.
@@ -2606,7 +2618,7 @@ class JarvisLive:
                 except (RuntimeError, asyncio.CancelledError):
                     break   # executor shutting down — exit cleanly
         except Exception as e:
-            print(f"[JARVIS] ❌ Play: {e}")
+            print(f"[ULTRON] ❌ Play: {e}")
             raise
         finally:
             self.set_speaking(False)
@@ -2785,7 +2797,7 @@ class JarvisLive:
                             turns={"role": "user", "parts": [{"text": p2}]},
                             turn_complete=True,
                         )
-                        print("[JARVIS] Briefing phase 2 (news) sent.")
+                        print("[ULTRON] Briefing phase 2 (news) sent.")
                     except Exception as e:
                         print(f"[Briefing] Phase 2 error: {e}")
                         self.ui.write_log("SYS: Could not fetch the news for the briefing.")
@@ -2805,9 +2817,7 @@ class JarvisLive:
         self._session_log = []    # reset immediately so the next session starts clean
 
         memory = load_memory()
-        lang_entry = memory.get("identity", {}).get("language", {})
-        lang = (lang_entry.get("value", "") if isinstance(lang_entry, dict) else str(lang_entry)).strip()
-        lang = lang or "English"
+        lang = _memory_language(memory)
 
         convo = "\n".join(log[-40:])   # cap at last 40 turns to stay within token budget
         prompt = (
@@ -2854,7 +2864,7 @@ class JarvisLive:
         await asyncio.sleep(300)          # wait 5 min after startup before first check
         while True:
             if self.session and self._awake:
-                # Don't interrupt if user spoke recently or JARVIS is mid-sentence
+                # Don't interrupt if user spoke recently or ULTRON is mid-sentence
                 with self._speaking_lock:
                     speaking = self._is_speaking
                 recent_speech = (time.monotonic() - self._last_user_speech) < 30
@@ -2874,7 +2884,7 @@ class JarvisLive:
                                 turns={"role": "user", "parts": [{"text": msg}]},
                                 turn_complete=True,
                             )
-                            print("[JARVIS] Monitor alert sent.")
+                            print("[ULTRON] Monitor alert sent.")
                             await asyncio.sleep(6)   # gap between consecutive alerts
                     except Exception as e:
                         print(f"[Monitor] ⚠️ Background check error: {e}")
@@ -2917,7 +2927,7 @@ class JarvisLive:
                     turns={"role": "user", "parts": [{"text": prompt}]},
                     turn_complete=True,
                 )
-                print("[JARVIS] Proactive check-in.")
+                print("[ULTRON] Proactive check-in.")
             except Exception as e:
                 print(f"[Proactive] ⚠️ {e}")
 
@@ -2963,7 +2973,7 @@ class JarvisLive:
                     await asyncio.sleep(0.1)
                 if self.session:
                     # A remote command is deliberate control and the phone user
-                    # has no desktop WAKE button — so it wakes JARVIS if asleep.
+                    # has no desktop WAKE button — so it wakes ULTRON if asleep.
                     if self._wake_enabled and not self._awake:
                         self.wake(reason="remote command")
                     await self.session.send_client_content(
@@ -3029,7 +3039,14 @@ class JarvisLive:
             # Runs for the whole lifetime, not just inside an active session
             asyncio.create_task(self._process_dashboard_commands())
         except Exception as e:
+            # A broken dashboard import used to be a single console line, which is
+            # how the phone remote stayed dead without anyone noticing. Say it in
+            # the UI too — the user can act on it, a log line scrolling past cannot.
             print(f"[Dashboard] Disabled: {e}")
+            try:
+                self.ui.write_log(f"SYS: Phone dashboard unavailable — {e}")
+            except Exception:
+                pass
             self._dashboard = None
 
         _resumed_with = False
@@ -3103,12 +3120,12 @@ class JarvisLive:
                         self.ui.write_log("SYS: Reconnected — conversation restored.")
 
                     # Wake word: if enabled, come up ASLEEP (mic gated, silent)
-                    # until the user says "Hey Jarvis" or taps wake in the UI.
+                    # until the user says the wake phrase or taps wake in the UI.
                     if self._wake_enabled:
                         self._ensure_wake_detector()
                         self._awake = False
                         self.ui.set_state("SLEEPING")
-                        self.ui.write_log("SYS: Ultron online — sleeping. Say 'Hey Jarvis' to wake me.")
+                        self.ui.write_log(f"SYS: Ultron online — sleeping. Say '{WAKE_PHRASE}' to wake me.")
                     else:
                         self._awake = True
                         self.ui.set_state("LISTENING")
@@ -3148,7 +3165,7 @@ class JarvisLive:
                 # Voluntary reconnect (voice change) — not an error. Rebuild the
                 # session immediately with no backoff and no scary logs.
                 if _is_reconnect_signal(e):
-                    print("[JARVIS] Voluntary reconnect requested.")
+                    print("[ULTRON] Voluntary reconnect requested.")
                     if not _keep_context_of(e):
                         # A deliberate clean slate (voice change) — drop the
                         # handle so the next connect really does start empty.
@@ -3168,7 +3185,7 @@ class JarvisLive:
                     or "INVALID_ARGUMENT" in str(e)
                     or "NOT_FOUND" in str(e)
                 ):
-                    print("[JARVIS] 🔗 Resumption handle rejected — starting a fresh session")
+                    print("[ULTRON] 🔗 Resumption handle rejected — starting a fresh session")
                     self.ui.write_log("SYS: Could not restore the conversation — starting fresh.")
                     self._resume_handle = None
                     self._conn_backoff = 0
@@ -3194,7 +3211,7 @@ class JarvisLive:
 
                 # Out of quota, or this model is not available to this key —
                 # step down the ladder and reconnect straight away. This is the
-                # difference between "JARVIS is quieter today" and "JARVIS does
+                # difference between "ULTRON is quieter today" and "ULTRON does
                 # not start today": one model means one daily limit, and the
                 # limit always arrives mid-conversation.
                 if _gemini.note_live_failure(live_model, err_str):
@@ -3222,7 +3239,7 @@ class JarvisLive:
                     or "thinking" in err_str.lower()
                 ):
                     self._tuned_live = False
-                    print("[JARVIS] Live tuning rejected — reconnecting without it.")
+                    print("[ULTRON] Live tuning rejected — reconnecting without it.")
                     continue
 
                 # Proactive audio rejected by the server (preview API drift) —
@@ -3268,7 +3285,7 @@ class JarvisLive:
                 self.session = None
                 # Only save if there was a real conversation (≥3 turns)
                 if len(self._session_log) >= 3:
-                    asyncio.create_task(self._save_session_summary())
+                    spawn(self._save_session_summary(), name="session-summary")
 
             self.set_speaking(False)
             self.ui.set_state("SLEEPING")
@@ -3280,15 +3297,12 @@ class JarvisLive:
             print(f"[Ultron] Reconnecting in {delay}s...")
             await asyncio.sleep(delay)
 
-# Ultron alias
-UltronLive = JarvisLive
-
 def main():
-    ui = JarvisUI("ultron_avatar.png")
+    ui = UltronUI("ultron_avatar.png")
 
     def runner():
         ui.wait_for_api_key()
-        ultron = JarvisLive(ui)
+        ultron = UltronLive(ui)
         try:
             asyncio.run(ultron.run())
         except KeyboardInterrupt:

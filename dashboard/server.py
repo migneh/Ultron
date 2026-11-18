@@ -18,6 +18,8 @@ import string
 import time
 from pathlib import Path
 
+from core.tasks import spawn as _spawn
+
 _DEPS_OK = False
 try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
@@ -458,9 +460,14 @@ def _read(name: str) -> str:
 
 
 # ── Dashboard Global Instance & Helpers ─────────────────────────────────────
-_GLOBAL_DASHBOARD: "DashboardServer" | None = None
+# The WHOLE annotation has to be the string. `"DashboardServer" | None` evaluates
+# the union at runtime (this module has no `from __future__ import annotations`),
+# and `str | None` raises TypeError — so importing this module failed outright and
+# main.py's `except Exception` around dashboard startup reported "Dashboard
+# disabled", meaning the phone remote never worked at all.
+_GLOBAL_DASHBOARD: "DashboardServer | None" = None
 
-def get_dashboard() -> "DashboardServer" | None:
+def get_dashboard() -> "DashboardServer | None":
     """Returns singleton instance of DashboardServer if running."""
     return _GLOBAL_DASHBOARD
 
@@ -771,9 +778,6 @@ class DashboardServer:
   sessionStorage.setItem('ultron_token','{tok}');
   sessionStorage.setItem('ultron_key','{key}');
   localStorage.setItem('ultron_device_token','{dev_tok}');
-  sessionStorage.setItem('jarvis_token','{tok}');
-  sessionStorage.setItem('jarvis_key','{key}');
-  localStorage.setItem('jarvis_device_token','{dev_tok}');
   setTimeout(function(){{location.replace('/')}}, 350);
 </script>
 </body></html>""")
@@ -1068,17 +1072,28 @@ class DashboardServer:
                 return JSONResponse({"error": "Unauthorized"}, status_code=401)
             try:
                 body = await req.json()
-                text = str(body.get("text", ""))
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Body must be JSON."},
+                                    status_code=400)
+            text = str(body.get("text", ""))
+            try:
                 import pyperclip
-                pyperclip.copy(text)
-                asyncio.create_task(self.broadcast({
-                    "type": "clipboard_sync",
-                    "text": text[:200],
-                    "timestamp": time.strftime("%H:%M:%S"),
-                }))
-                return JSONResponse({"ok": True, "length": len(text)})
+                await asyncio.to_thread(pyperclip.copy, text)   # clipboard hosts block
             except Exception as e:
-                return JSONResponse({"error": str(e)}, status_code=500)
+                # A machine with no clipboard backend (headless Linux, some WMs) is a
+                # capability gap, not a server fault: answer in the same shape as the
+                # GET twin instead of a bare 500 with the exception text in it.
+                print(f"[Dashboard] clipboard write unavailable: {e}")
+                return JSONResponse(
+                    {"ok": False, "error": "PC clipboard is unavailable on this machine."},
+                    status_code=503,
+                )
+            asyncio.create_task(self.broadcast({
+                "type": "clipboard_sync",
+                "text": text[:200],
+                "timestamp": time.strftime("%H:%M:%S"),
+            }))
+            return JSONResponse({"ok": True, "length": len(text)})
 
         @app.post("/api/pc-control")
         async def pc_control_ep(req: Request):
@@ -1200,7 +1215,9 @@ class DashboardServer:
         ssl_cert = certs / "ultron.crt" if (certs / "ultron.crt").exists() else certs / "jarvis.crt"
 
         if use_ssl:
-            asyncio.create_task(self._serve_alias())
+            # port+1 is the fallback phones are told to type manually; if it fails
+            # to bind, say so instead of leaving a URL that silently never answers.
+            _spawn(self._serve_alias(), name="dashboard-alias-port")
 
         cfg = uvicorn.Config(
             self.app, host="0.0.0.0", port=PORT, log_level="warning",

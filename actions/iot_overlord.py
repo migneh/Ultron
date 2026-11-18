@@ -142,10 +142,13 @@ def execute_lockdown_protocol() -> str:
 
     # 2. Arm sentry protocol if available
     try:
-        from actions.sentry_protocol import arm_sentry
-        arm_res = arm_sentry(delay=3)
+        from actions.sentry_protocol import activate_sentry
+        arm_res = activate_sentry()
         lines.append(f"* Perimeter Sentry: {arm_res}")
-    except Exception:
+    except Exception as e:
+        # Never silent: this used to import a name that does not exist, so the
+        # lockdown reported "Standby" forever and looked like a design choice.
+        print(f"[IoT] Sentry activation failed: {e}")
         lines.append("* Perimeter Sentry: Standby.")
 
     # 3. Lock workstation screen cross-platform

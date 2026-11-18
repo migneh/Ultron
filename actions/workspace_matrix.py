@@ -476,14 +476,17 @@ def orchestrate_workspace(
     # 7. Cyber Audit Trigger (if preset requests)
     if preset.get("run_audit"):
         try:
-            from actions.network_auditor import run_security_audit
-            audit_report = run_security_audit(quick=True)
+            from actions.network_auditor import audit_security_posture
+            audit_report = audit_security_posture()
             lines.append("-" * 60)
             lines.append("[SECURITY POSTURE TELEMETRY]")
             for audit_line in audit_report.splitlines()[:6]:
                 lines.append(f"  {audit_line}")
-        except Exception:
-            lines.append("  * Cyber Audit: Network telemetry online.")
+        except Exception as e:
+            # The old fallback text claimed the telemetry was "online" while the
+            # audit had never run at all (it imported a nonexistent function).
+            print(f"[Workspace] Cyber audit failed: {e}")
+            lines.append("  * Cyber Audit: skipped — audit engine unavailable.")
 
     # 8. Do Not Disturb
     if preset.get("dnd"):

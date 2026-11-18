@@ -5,6 +5,7 @@ import asyncio
 import concurrent.futures
 import os
 import platform
+import re
 import shutil
 import subprocess
 import threading
@@ -21,17 +22,33 @@ from playwright.async_api import (
 )
 _OS = platform.system()   # "Windows" | "Darwin" | "Linux"
 
+# Schemes that are complete without "//" (about:blank, file:/tmp/x, mailto:…).
+_BARE_SCHEME_RE = re.compile(r"^(about|data|file|mailto|view-source|chrome-extension):", re.I)
+# localhost / loopback / LAN address, with or without a port.
+_LOCAL_HOST_RE = re.compile(
+    r"^(localhost|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}"
+    r"|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})(?::\d{1,5})?(?:/.*)?$",
+    re.I,
+)
+
+
 def _normalize_url(url: str) -> str:
     """
     Bare words like "instagram" → "https://instagram.com"
     Domains like "instagram.com" → "https://instagram.com"
     Full URLs pass through unchanged.
+    Local servers keep http and their port: "localhost:8000" → "http://localhost:8000"
     """
     url = url.strip()
     if not url:
         return "about:blank"
-    if "://" in url:
+    # Anything already carrying a scheme is left alone — that includes
+    # "about:blank", which used to be mangled into "https://about:blank.com".
+    if "://" in url or _BARE_SCHEME_RE.match(url):
         return url
+    # A dev server on this machine or on the LAN speaks plain http.
+    if _LOCAL_HOST_RE.match(url):
+        return "http://" + url
     # No dot at all → assume .com  (e.g. "instagram" → "instagram.com")
     if "." not in url:
         url = url + ".com"
@@ -107,7 +124,7 @@ def _real_profile_dir(browser: str) -> str:
             print(f"[Browser] ✅ Real profile found for {browser}: {p}")
             return str(p)
 
-    fallback = home / ".jarvis_profiles" / browser
+    fallback = home / ".ultron_profiles" / browser
     fallback.mkdir(parents=True, exist_ok=True)
     print(f"[Browser] ⚠️  Real profile not found for {browser}, using: {fallback}")
     return str(fallback)
@@ -523,7 +540,7 @@ class _BrowserSession:
 
         if self._spec is None:
             raise RuntimeError(
-                f"'{self.browser_name}' bu platformda ({_OS}) desteklenmiyor."
+                f"'{self.browser_name}' is not supported on this platform ({_OS})."
             )
 
         engine_name = self._spec["engine"]
@@ -533,7 +550,7 @@ class _BrowserSession:
 
         if engine_name == "firefox":
             profile = _firefox_profile_dir() or str(
-                Path.home() / ".jarvis_profiles" / "firefox"
+                Path.home() / ".ultron_profiles" / "firefox"
             )
             kwargs: dict = {
                 "headless":    False,
@@ -547,17 +564,17 @@ class _BrowserSession:
             try:
                 self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
             except Exception as e:
-                print(f"[Browser] Firefox real profile failed ({e}), using JARVIS profile")
-                jarvis = str(Path.home() / ".jarvis_profiles" / "firefox_jarvis")
-                Path(jarvis).mkdir(parents=True, exist_ok=True)
-                self._context = await engine_obj.launch_persistent_context(jarvis, **kwargs)
+                print(f"[Browser] Firefox real profile failed ({e}), using ULTRON profile")
+                ultron_profile = str(Path.home() / ".ultron_profiles" / "firefox_ultron")
+                Path(ultron_profile).mkdir(parents=True, exist_ok=True)
+                self._context = await engine_obj.launch_persistent_context(ultron_profile, **kwargs)
 
             self._page = await self._adopt_page()
             print(f"[Browser] ✅ Firefox launched")
             return
 
         if engine_name == "webkit":
-            safari_profile = str(Path.home() / ".jarvis_profiles" / "safari")
+            safari_profile = str(Path.home() / ".ultron_profiles" / "safari")
             Path(safari_profile).mkdir(parents=True, exist_ok=True)
             kwargs = {
                 "headless":    False,
@@ -609,16 +626,16 @@ class _BrowserSession:
 
         # The real profile could not be opened (browser already open / locked
         # profile / newer Chrome versions block the real profile under
-        # automation). Fall back to a persistent JARVIS automation profile —
+        # automation). Fall back to a persistent ULTRON automation profile —
         # accounts logged in here once stay logged in on later sessions too.
-        jarvis_profile = str(Path.home() / ".jarvis_profiles" / self.browser_name)
-        Path(jarvis_profile).mkdir(parents=True, exist_ok=True)
-        print(f"[Browser] Retrying with JARVIS profile: {jarvis_profile}")
+        ultron_profile = str(Path.home() / ".ultron_profiles" / self.browser_name)
+        Path(ultron_profile).mkdir(parents=True, exist_ok=True)
+        print(f"[Browser] Retrying with ULTRON profile: {ultron_profile}")
 
         try:
-            self._context = await engine_obj.launch_persistent_context(jarvis_profile, **kwargs)
+            self._context = await engine_obj.launch_persistent_context(ultron_profile, **kwargs)
             self._page = await self._adopt_page()
-            print(f"[Browser] ✅ Launched [{label}] with JARVIS profile "
+            print(f"[Browser] ✅ Launched [{label}] with ULTRON profile "
                   f"(sign-ins persist across sessions)")
         except Exception as e2:
             raise RuntimeError(f"Could not launch {self.browser_name}: {e2}") from e2
@@ -805,7 +822,7 @@ class _BrowserSession:
     async def screenshot(self, path: str = None) -> str:
         page = await self._get_page()
         try:
-            save_path = path or str(Path.home() / "Desktop" / "jarvis_screenshot.png")
+            save_path = path or str(Path.home() / "Desktop" / "ultron_screenshot.png")
             await page.screenshot(path=save_path, full_page=False)
             return f"Screenshot saved: {save_path}"
         except Exception as e:
@@ -888,14 +905,22 @@ class _SessionRegistry:
         return f"Active browser → {browser_name}"
 
     def close_one(self, browser_name: str) -> str:
+        """Close one session. Aliases and casing are resolved like get()/switch()."""
+        name = _ALIASES.get(browser_name.lower().strip(), browser_name.lower().strip())
         with self._lock:
-            sess = self._sessions.pop(browser_name, None)
-        if sess:
-            sess.close()
-            if self._active_browser == browser_name:
+            sess = self._sessions.pop(name, None)
+            if self._active_browser == name:
                 self._active_browser = ""
-            return f"{browser_name} closed."
-        return f"No active session for: {browser_name}"
+        if not sess:
+            return f"No active session for: {browser_name}"
+        try:
+            sess.close()
+        except Exception as e:
+            # A hung or half-dead browser must not take the command down with
+            # it: the session is already deregistered, so reporting the failure
+            # and moving on is the honest outcome.
+            print(f"[Registry] Could not close {name} cleanly: {e}")
+        return f"{name} closed."
 
     def close_all(self) -> str:
         with self._lock:
@@ -1114,10 +1139,6 @@ TOOL = {
             "path": {
                 "type": "STRING",
                 "description": "Save path for screenshot"
-            },
-            "incognito": {
-                "type": "BOOLEAN",
-                "description": "Open in private/incognito mode"
             },
             "clear_first": {
                 "type": "BOOLEAN",

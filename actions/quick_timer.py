@@ -37,15 +37,42 @@ def start_countdown_timer(seconds: int, message: str = "", speak_cb=None, player
     return f"Timer set for {time_desc} ({message or 'countdown'}). I will alert you when it expires."
 
 
+def _as_int(value, field: str) -> int:
+    """Coerce a tool argument to int, or raise ValueError with a readable reason.
+
+    The model is *asked* for INTEGER, but it does not always comply — "90" and
+    1.5 both arrive in practice. A bare int() on those raised straight out of the
+    handler, which the loader can only report as a failure; tool handlers are
+    supposed to answer instead.
+    """
+    if value is None or value == "":
+        return 0
+    if isinstance(value, bool):            # bool is an int subclass; not a duration
+        raise ValueError(f"{field} must be a number, not true/false")
+    try:
+        return int(float(value))           # accepts 90, "90", " 90 ", 1.5
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be a number, got {value!r}")
+
+
 def quick_timer_handler(parameters: dict, speak=None, player=None, **kwargs) -> str:
-    action = str(parameters.get("action", "timer")).lower().strip()
     seconds = parameters.get("seconds") or 0
     minutes = parameters.get("minutes") or 0
     message = parameters.get("message", "Timer finished")
 
-    total_secs = int(seconds) + int(minutes) * 60
+    only_one_given = bool(parameters.get("seconds") or parameters.get("minutes"))
+    try:
+        total_secs = _as_int(seconds, "seconds") + _as_int(minutes, "minutes") * 60
+    except ValueError as exc:
+        return f"I could not set that timer — {exc}."
+
+    if not only_one_given:
+        # Previously this silently became a one-minute timer, so a mis-routed
+        # call ("set a timer") produced a countdown nobody asked for.
+        return "How long should the timer run? Tell me minutes or seconds."
+
     if total_secs <= 0:
-        total_secs = 60  # Default 1 minute
+        return "That duration has already passed — give me a positive number of minutes or seconds."
 
     return start_countdown_timer(total_secs, message=message, speak_cb=speak, player_cb=player)
 

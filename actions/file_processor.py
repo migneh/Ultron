@@ -1,5 +1,5 @@
 """
-file_processor.py — JARVIS Universal File Processor
+file_processor.py — ULTRON Universal File Processor
 
 Supported types:
   image   → describe, ocr, resize, convert, compress, crop
@@ -254,6 +254,10 @@ def _process_pdf(path: Path, action: str, params: dict, speak=None) -> str:
 
     return f"Unknown PDF action: '{action}'. Try: summarize, extract_text, info, to_word"
 
+_TEXT_ACTIONS = frozenset({"summarize", "analyze", "reformat", "fix", "translate",
+                           "translate_hint", "to_bullet", "custom"})
+
+
 def _process_text_doc(path: Path, file_type: str, action: str,
                        params: dict, speak=None) -> str:
     action = action or "summarize"
@@ -278,31 +282,43 @@ def _process_text_doc(path: Path, file_type: str, action: str,
     if action == "word_count":
         words = len(content.split())
         chars = len(content)
-        lines = content.count("\n")
+        lines = len(content.splitlines())          # counts the last line, not just breaks
         return f"Word count: {words} words, {chars} characters, {lines} lines."
 
     if action == "extract_text":
-        if file_type != "txt":
+        # _detect_type() returns "text" for .txt/.md/.log — the old comparison
+        # against "txt" was always true, so asking for a text file's contents
+        # wrote a copy next to it instead of answering.
+        if file_type != "text":
             out = _output_path(path, "extracted", ".txt")
             out.write_text(content, encoding="utf-8")
             return f"Text extracted. Saved: {out.name}"
         return content[:2000]
 
-    instruction = params.get("instruction", "")
+    instruction = (params.get("instruction") or "").strip()
+
+    # Decide the prompt BEFORE formatting it. The old order built custom's prompt
+    # from whatever instruction existed at the time, then reassigned `instruction`
+    # (a no-op), and an unknown action with no instruction produced a prompt that
+    # was literally "\n\n<document>" — the model was handed text with no task.
+    if action not in _TEXT_ACTIONS:
+        instruction = instruction or (
+            f"Perform the '{action}' operation on this document and return the result."
+        )
+        action = "custom"
+
     prompt_map  = {
         "summarize":  f"Summarize this document concisely:\n\n{content[:40000]}",
         "analyze":    f"Analyze this document:\n\n{content[:40000]}",
         "reformat":   f"Reformat this text with clean structure, proper headings and paragraphs:\n\n{content[:40000]}",
         "fix":        f"Fix grammar, spelling and style issues in this text:\n\n{content[:40000]}",
+        "translate":  (f"Translate this text ({instruction}). Return only the translation:\n\n"
+                       f"{content[:40000]}" if instruction
+                       else f"Translate this text into English. Return only the translation:\n\n{content[:40000]}"),
         "translate_hint": f"What language is this and what does it say? Summarize:\n\n{content[:10000]}",
         "to_bullet":  f"Convert this text into a clear bullet-point summary:\n\n{content[:40000]}",
         "custom":     f"{instruction}\n\n{content[:40000]}",
     }
-
-    if action not in prompt_map:
-
-        action  = "custom"
-        instruction = action
 
     try:
         model    = _gemini_client()
@@ -328,7 +344,9 @@ def _process_data(path: Path, file_type: str, action: str,
 
     try:
         if file_type == "csv":
-            df = pd.read_csv(path, encoding="utf-8", errors="replace")
+            # pandas spells this `encoding_errors`; `errors=` is a TypeError on
+            # every read, which made the whole CSV branch dead on arrival.
+            df = pd.read_csv(path, encoding="utf-8", encoding_errors="replace")
         else:
             df = pd.read_excel(path)
     except Exception as e:

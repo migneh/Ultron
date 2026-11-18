@@ -371,7 +371,7 @@ def save_voice_warp_intensity(intensity: float) -> None:
 
 
 def get_wake_word_enabled() -> bool:
-    """Whether local wake-word gating is on (assistant sleeps until 'Hey Jarvis')."""
+    """Whether local wake-word gating is on (assistant sleeps until the wake phrase)."""
     return load_api_keys().get("wake_word_enabled", False)
 
 
@@ -403,7 +403,7 @@ def get_hud_style() -> str:
     """Which centrepiece the HUD draws: the animated head, or the reactor core.
 
     Taste, not capability — both render in the same software painter and cost
-    about the same. Defaults to the head because that is what MARK LIV shipped
+    about the same. Defaults to the head because that is what Ultron shipped
     with; anyone who preferred the older look can switch back in ⚙ and the
     choice survives a restart.
     """

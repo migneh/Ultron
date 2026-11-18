@@ -276,7 +276,7 @@ def _clean_tts_text(text: str) -> str:
     text = re.sub(r"[\u2600-\u27bf]", "", text)
     text = re.sub(r"[\ufe00-\ufe0f]", "", text)
     # Strip assistant persona prefix if echoed by LLM (e.g. "Ultron: ...", "Assistant: ...")
-    text = re.sub(r"^(?:ultron|jarvis|assistant|system)\s*:\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(?:ultron|assistant|system)\s*:\s*", "", text, flags=re.IGNORECASE)
     # Strip leading quotes, colons, dashes, ellipses, or punctuation that cause TTS stutter
     text = re.sub(r"^[\"\'“”‘’`:—\-\s\.\,\;]+", "", text)
     # Strip trailing quotes or formatting

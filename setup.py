@@ -1,5 +1,5 @@
 """
-MARK LIV — one-time setup.
+Ultron — one-time setup.
 
 Installs the Python dependencies for THIS operating system only: the OS-specific
 packages in requirements.txt carry `sys_platform` markers, so a macOS or Linux
@@ -7,7 +7,7 @@ user never pulls Windows-only libraries (and vice-versa). Then it fetches the
 Playwright browsers needed for web automation (current-OS builds only).
 
 Two things it deliberately does NOT install:
-  * the optional local wake word ("Hey Jarvis") — one-click, opt-in, from
+  * the optional local wake word (see WAKE_PHRASE) — one-click, opt-in, from
     ⚙ → WAKE WORD inside the app;
   * anything for the avatar — the holographic head renders in software on the
     PyQt6 and numpy already listed here. No GPU, no OpenGL, no extra packages.
@@ -19,6 +19,12 @@ from pathlib import Path
 
 OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 HERE = Path(__file__).resolve().parent
+
+try:                      # wake_word only imports stdlib, so this is cheap
+    sys.path.insert(0, str(HERE))
+    from core.wake_word import WAKE_PHRASE
+except Exception:
+    WAKE_PHRASE = "Hey Jarvis"
 
 MIN_PY = (3, 11)        # hard floor: below this the syntax used here won't parse
 MAX_PY = (3, 13)        # highest version this is actually tested on
@@ -47,7 +53,7 @@ def _check_python() -> None:
               f"{MAX_PY[0]}.{MAX_PY[1]} and run setup with that.")
         return
     if v < MIN_PY:
-        print(f"\n❌ Python {v[0]}.{v[1]} detected — MARK LIV needs at "
+        print(f"\n❌ Python {v[0]}.{v[1]} detected — Ultron needs at "
               f"least Python {MIN_PY[0]}.{MIN_PY[1]}.")
         print("   Install a supported version and run setup with it, e.g.:")
         print(f"     py -{MIN_PY[0]}.{MIN_PY[1]} setup.py        (Windows)")
@@ -67,7 +73,7 @@ def _check_assets() -> None:
 
 
 def main() -> None:
-    print(f"⚙  MARK LIV setup — detected OS: {OS or 'unknown'}, "
+    print(f"⚙  Ultron setup — detected OS: {OS or 'unknown'}, "
           f"Python {sys.version_info[0]}.{sys.version_info[1]}")
     _check_python()
 
@@ -105,12 +111,22 @@ def main() -> None:
             )
     elif OS == "Linux":
         print(
-            "\nℹ️  Linux note — a few voice-controlled OS actions shell out to "
-            "native tools. Install the ones you'll use via your package manager:\n"
+            "\nℹ️  Linux note — pip cannot install these; they are system libraries.\n"
+            "    Without them the app exits on import, so install them first:\n"
+            "    • the HUD        → libxkbcommon0 libxkbcommon-x11-0 libgl1 libegl1 "
+            "libxcb-cursor0\n"
+            "    • audio in/out   → libportaudio2\n"
+            "    • OCR (optional) → tesseract-ocr\n"
+            "    Debian/Ubuntu:  sudo apt install libxkbcommon0 libxkbcommon-x11-0 "
+            "libgl1 libegl1 libxcb-cursor0 libportaudio2\n"
+            "    Fedora:         sudo dnf install libxkbcommon libglvnd libXcursor "
+            "portaudio\n"
+            "\n    A few voice-controlled OS actions also shell out to native tools:\n"
             "    • volume      → pulseaudio-utils   (pactl)\n"
             "    • brightness  → brightnessctl\n"
             "    • reminders   → systemd (systemd-run) or 'at'\n"
-            "    • open URLs   → xdg-utils          (xdg-open)"
+            "    • open URLs   → xdg-utils          (xdg-open)\n"
+            "\n    Check your setup any time:  python scripts/doctor.py"
         )
     elif OS == "Darwin":
         print(
@@ -122,7 +138,7 @@ def main() -> None:
     print("\n✅ Setup complete!")
     print("   1) Launch it:  python main.py")
     print("   2) Paste your free Gemini API key when the setup screen appears.")
-    print("   3) (Optional) Enable 'Hey Jarvis' from ⚙ → WAKE WORD.")
+    print(f"   3) (Optional) Enable '{WAKE_PHRASE}' from ⚙ → WAKE WORD.")
 
 
 if __name__ == "__main__":

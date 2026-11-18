@@ -367,6 +367,8 @@
         if (d.ok && d.token) {
           sessionStorage.setItem('ultron_key', d.key);
           sessionStorage.setItem('ultron_token', d.token);
+          sessionStorage.setItem('ultron_key', d.key);
+          sessionStorage.setItem('ultron_token', d.token);
           sessionStorage.setItem('jarvis_key', d.key);
           sessionStorage.setItem('jarvis_token', d.token);
           location.replace('/');
@@ -403,6 +405,8 @@
         shake(); return;
       }
       if (data.ok && data.token) {
+        sessionStorage.setItem('ultron_key', key);
+        sessionStorage.setItem('ultron_token', data.token);
         sessionStorage.setItem('ultron_key', key);
         sessionStorage.setItem('ultron_token', data.token);
         sessionStorage.setItem('jarvis_key', key);

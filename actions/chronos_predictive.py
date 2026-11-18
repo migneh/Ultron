@@ -24,6 +24,12 @@ try:
     _GW_AVAILABLE = True
 except ImportError:
     _GW_AVAILABLE = False
+except Exception:
+    # pygetwindow raises NotImplementedError (not ImportError) on Linux, where it
+    # has no backend. Catching only ImportError made this whole module fail to
+    # load there — and since gw is only consulted on Windows, degrading silently
+    # is correct rather than losing the tool entirely.
+    _GW_AVAILABLE = False
 
 _OS = platform.system()
 _WIN_HIDE: dict = {"creationflags": subprocess.CREATE_NO_WINDOW} if _OS == "Windows" else {}

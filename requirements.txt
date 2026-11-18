@@ -67,13 +67,19 @@ qrcode[pil]>=7,<9
 # it work on the next launch, not send you back to pip. Every one of these is
 # imported inside a try/except at the point of use, so an uninstalled extra
 # disables exactly one plugin and never touches the rest of the app.
-google-api-python-client     # gmail_control, calendar_control — OAuth
-google-auth-oauthlib         # gmail_control, calendar_control — OAuth
-tinytuya                     # home_assistant — Tuya / Smart Life bulbs
-paho-mqtt                    # printer_control — MQTT printers
-openpyxl                     # excel_writer — spreadsheet output
+openpyxl                     # file_processor — reads .xlsx spreadsheets
+
+# ── Not used by anything in this build ─────────────────────────────────────
+# These were pinned for tools that exist upstream but not here (gmail_control,
+# calendar_control, home_assistant, printer_control). Uncomment the pair you
+# need when you write that action — google-api-python-client alone pulls a
+# dozen transitive packages, so it is not installed by default.
+# google-api-python-client   # gmail_control, calendar_control — OAuth
+# google-auth-oauthlib       # gmail_control, calendar_control — OAuth
+# tinytuya                   # home_assistant — Tuya / Smart Life bulbs
+# paho-mqtt                  # printer_control — MQTT printers
 youtube-transcript-api       # youtube_video — transcript fetch for summaries
-pygetwindow                  # game_updater, chat_takeover — window geometry
+pygetwindow                  # game_updater — window geometry (Windows only)
 bleak>=0.21.0                # airspace_sentinel — Bluetooth LE RF recon
 dnspython>=2.4.0             # network_auditor — multi-resolver DNS health audit
 
@@ -113,7 +119,7 @@ pynvml                       # system_monitor + the HUD's GPU meter (NVIDIA)
 #   - adb & fastboot            # Android Bridge & ROM flashing (C:\platform-tools\)
 #   - scrcpy                    # Zero-latency phone screen mirroring (C:\scrcpy-win64-v4.0\)
 
-# ── Optional: local wake word ("Hey Jarvis") ──────────────────────────────────
+# ── Optional: local wake word ("Hey Ultron") ──────────────────────────────────
 # Deliberately NOT installed by default — it's opt-in. Enable it (and download
 # the tiny model) with one click from ⚙ → WAKE WORD in the app, or install it
 # yourself with:  pip install openwakeword
