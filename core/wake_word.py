@@ -29,8 +29,26 @@ from typing import Callable
 # the user is told to say. The model name belongs to openwakeword and cannot be
 # rebranded; the phrase is spoken in UI messages, so both live here — change them
 # together, or the app will tell the user to say something nothing listens for.
-WAKE_MODEL = "hey_jarvis"
-WAKE_PHRASE = "Hey Jarvis"
+def _configured(key: str, default: str) -> str:
+    """A wake-word setting, from config when it is set there."""
+    try:
+        from memory.config_manager import load_api_keys
+        value = str(load_api_keys().get(key) or "").strip()
+        return value or default
+    except Exception:
+        return default
+
+
+# openwakeword ships "hey jarvis", "alexa" and friends — not "hey ultron", and a
+# model file cannot be renamed into a phrase. Both halves are therefore settings:
+# drop a custom model into openwakeword's models directory, point `wake_model` at
+# it and set `wake_phrase` to what it listens for. Renaming only one of them is
+# how an assistant ends up telling you to say something nothing is listening for.
+DEFAULT_MODEL = "hey_jarvis"
+DEFAULT_PHRASE = "Hey Jarvis"
+
+WAKE_MODEL = _configured("wake_model", DEFAULT_MODEL)
+WAKE_PHRASE = _configured("wake_phrase", DEFAULT_PHRASE)
 # Score in [0,1]; above this counts as a detection. Tunable per environment.
 DEFAULT_THRESHOLD = 0.5
 # Mic frames arrive at 16 kHz int16; this is just the detector's input rate.

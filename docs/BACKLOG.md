@@ -8,6 +8,26 @@ Ordered roughly by payoff.
 
 ---
 
+## Status: every item below is closed
+
+Pass 9 dealt with all eight. What was fixed has a regression test in `tests/test_backlog.py`; the
+two entries that could not be exercised here are marked **written, not proven** in
+`docs/HISTORY.md`. Keep this file for the *reasoning* — it is still the record of how each one was
+found.
+
+| # | Item | Outcome |
+|---|---|---|
+| 1 | Windows OCR stub | Implemented (`Windows.Media.Ocr` via PowerShell). **Not proven** — no Windows here. |
+| 2 | Blocking I/O in async paths | Upload writes moved to `asyncio.to_thread`; the rest measured and closed as not-a-bug. |
+| 3 | Dead locals | Removed from `code_helper`, `bounty_hunter`, `android_bridge`. |
+| 4 | `bounty_hunter` hard-coded `$` | Currency detected from the source, else configured, else `$`. |
+| 5 | Wake phrase "Hey Jarvis" | `wake_model`/`wake_phrase` are settings; built-in pair remains the default. |
+| 6 | Legacy `jarvis_*` keys | Login writes only `ultron_*`; old names still read. |
+| 7 | `pygetwindow` on Linux | Already fixed in pass 7. |
+| 8 | `browser_control` incognito | `private: true` opens a throwaway profile. **Not proven** — no Chromium here. |
+
+---
+
 ## 1. The Windows-native OCR fallback in `optical_hud` is a stub
 
 `actions/optical_hud.py` builds a PowerShell script (`ps_script`) for Windows Runtime OCR but

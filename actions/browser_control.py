@@ -468,6 +468,12 @@ class _BrowserSession:
         self.browser_name = browser_name
         self._spec        = _resolve_browser(browser_name)
 
+        # Private browsing: a throwaway profile, deleted when the session ends.
+        # Set before the browser is first opened; the flag is honoured by
+        # _launch(), which then never touches the user's real profile.
+        self.incognito:      bool        = False
+        self._incognito_dir: str | None  = None
+
         self._loop:    asyncio.AbstractEventLoop | None = None
         self._thread:  threading.Thread | None          = None
         self._ready    = threading.Event()
@@ -519,6 +525,7 @@ class _BrowserSession:
             except Exception:
                 pass
         self._context = self._page = None
+        self._discard_incognito_dir()      # private profiles do not survive the session
 
     async def _adopt_page(self) -> Page:
         """
@@ -547,6 +554,10 @@ class _BrowserSession:
         exe         = self._spec["exe"]
         channel     = self._spec["channel"]
         engine_obj  = getattr(self._pw, engine_name)
+
+        if self.incognito:
+            await self._launch_incognito(engine_obj, exe, channel)
+            return
 
         if engine_name == "firefox":
             profile = _firefox_profile_dir() or str(
@@ -640,6 +651,49 @@ class _BrowserSession:
         except Exception as e2:
             raise RuntimeError(f"Could not launch {self.browser_name}: {e2}") from e2
 
+
+    async def _launch_incognito(self, engine_obj, exe, channel) -> None:
+        """Open a throwaway profile that is deleted when the session closes.
+
+        Deliberately has no fallback to the real or ULTRON profile: silently
+        browsing with the user's cookies is the one thing a private session must
+        never do, so a failure here is reported instead of retried.
+        """
+        import tempfile
+
+        profile = tempfile.mkdtemp(prefix=f"ultron-private-{self.browser_name}-")
+        self._incognito_dir = profile
+
+        kwargs: dict = {
+            "headless":    False,
+            "slow_mo":     0,
+            "viewport":    None,
+            "no_viewport": True,
+            "timeout":     25_000,
+            "args": ["--no-first-run", "--disable-default-apps",
+                     "--no-default-browser-check"],
+        }
+        if exe:
+            kwargs["executable_path"] = exe
+        elif channel:
+            kwargs["channel"] = channel
+
+        try:
+            self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
+            self._page = await self._adopt_page()
+            print(f"[Browser] 🔒 Private session for {self.browser_name} "
+                  f"(profile {profile}, discarded on close)")
+        except Exception as e:
+            self._discard_incognito_dir()
+            raise RuntimeError(
+                f"Could not open a private {self.browser_name} session: {e}"
+            ) from e
+
+    def _discard_incognito_dir(self) -> None:
+        import shutil
+        if self._incognito_dir:
+            shutil.rmtree(self._incognito_dir, ignore_errors=True)
+            self._incognito_dir = None
 
     async def _get_page(self) -> Page:
         await self._launch()
@@ -965,6 +1019,21 @@ def browser_control(
         _log(player, result)
         return result
 
+    # `private: true` (or `incognito: true`) opens a throwaway profile that is
+    # deleted when the browser is closed — the one way to browse without the
+    # user's cookies. It must be requested before the session is first opened.
+    if params.get("private") or params.get("incognito"):
+        target = browser or _registry._active_browser or _detect_default_browser()
+        sess = _registry.get(target)
+        if sess._context is None and not sess.incognito:
+            sess.incognito = True
+            print(f"[Browser] 🔏 Private mode requested for {target}")
+        elif not sess.incognito:
+            result = (f"{target} is already open with your normal profile — close it "
+                      f"(action 'close') before opening a private session.")
+            _log(player, result)
+            return result
+
     if action == "list_browsers":
         result = _registry.list_sessions()
         _log(player, result)
@@ -1111,6 +1180,10 @@ TOOL = {
             "engine": {
                 "type": "STRING",
                 "description": "Search engine: google | bing | duckduckgo | yandex (default: google)"
+            },
+            "private": {
+                "type": "BOOLEAN",
+                "description": "Open a throwaway profile (no cookies, history kept only until the browser closes). Set it with the first action of the session; an already-open normal session must be closed first."
             },
             "selector": {
                 "type": "STRING",

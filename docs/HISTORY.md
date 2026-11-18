@@ -621,3 +621,64 @@ erased. The order is now: surrounding settings first, `save_ai_choice()` last, t
   subprocess run of it produces a report with no traceback.
 
 Suite: 176 tests.
+
+# Pass 9, part two — the backlog, item by item
+
+Eight deferred items. Each is either fixed with a test or closed with the reason it is not a bug.
+
+**1. `bounty_hunter` printed every price in dollars.** The detector's own pattern accepted
+`$ € £ ₹ Rs`, then the report said `$80,000.00` for a page quoting `Rs 80,000` — right digits,
+wrong money, stated as fact. `core/ui_currency.py` now owns that decision: a symbol found in the
+source wins, otherwise the configured `currency_symbol` (default `$`), otherwise `$`. The symbol is
+stored with the bounty, so the list view stays right weeks later. A Tunisian user can set `DT`.
+
+**2. Dead locals.** `code_helper` base64-encoded every screenshot and threw the string away —
+megabytes of work per screen-debug call. `bounty_hunter`'s `detected_title` and `android_bridge`'s
+`lines` were never read. `quick_timer`'s had already gone. All removed.
+
+Removing the first one deleted `_VALID_INTENTS` along with it (a slice from one `def` to the next
+swallowed the constant between them). ruff's F821 caught it; `actions/code_helper.py` now holds the
+set with a comment saying why it is checked.
+
+**3. Legacy `jarvis_*` dashboard keys.** `login.html` wrote the token under *both* names, twice
+each, in two places. It now writes `ultron_key`/`ultron_token` only. `app.html` still *reads*
+`jarvis_token` so a phone paired before the rename is not logged out.
+
+**4. Blocking I/O inside async code.** The upload handler wrote each 64 KB chunk to disk on the
+event loop; a 500 MB upload is ~8000 blocking writes, which is a phone freezing while it saves its
+own file. Writes go through `asyncio.to_thread` now. The other four ruff ASYNC hits were measured
+and left alone: `Path.exists()`, a buffered single-write `open()`, and `os.system("rundll32 ...
+SetSuspendState")` on an explicit *suspend the machine* request — where blocking the loop is the
+correct behaviour, because the loop is about to stop existing. Changing them would be lint-driven
+churn around microsecond calls.
+
+**5. The wake phrase said "Hey Jarvis".** It has to: openwakeword's pretrained model *is*
+`hey_jarvis`, and a model file cannot be renamed into a phrase. So both halves are settings —
+`wake_model` and `wake_phrase` — saved together by `save_wake_word()`, with the built-in pair as the
+fallback so an empty save cannot freeze the current value in. Point them at a custom model and the
+assistant stops asking for a phrase nothing listens for.
+
+**6. `pygetwindow` on Linux.** Already guarded; closed as fixed in pass 7 (the import sat outside
+its `try`, which made `chronos_predictive` unimportable off Windows).
+
+**7. Browser privacy.** `browser_control` could only ever drive the user's real profile or the
+persistent ULTRON one — there was no way to browse without touching their cookies. `private: true`
+now opens a throwaway profile via `mkdtemp`, deletes it on close, and deliberately has **no**
+fallback to the real profile: quietly browsing with someone's cookies is the one thing a private
+session must never do, so a failure is reported instead of retried.
+
+**8. Windows OCR.** `_extract_text_from_image` built a PowerShell script, discarded it inside a
+`try` block that could not fail, and returned `""` — so on Windows (where pytesseract is almost
+never installed) every screen triage reported "no text" and then "no errors found". The
+`Windows.Media.Ocr` recogniser is now actually run, with the `AsTask`/`Await` bridging, a 20 s
+internal and 30 s process timeout, and `""` on any failure.
+
+## Verified / unverified
+
+Verified by execution here: currency parsing and formatting, the stored symbol, the launch
+ordering, deletion of a private profile, OCR's non-Windows and failing-recogniser paths, and every
+test in `tests/test_backlog.py` (26). Suite: 201 tests.
+
+**Unverified, by necessity:** the PowerShell OCR script has never been run (no Windows), and
+`private: true` has never opened a browser (no Playwright/Chromium here). Both are implemented and
+reviewed, not exercised. Treat them as "written, not proven".

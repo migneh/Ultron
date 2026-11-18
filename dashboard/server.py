@@ -960,6 +960,11 @@ class DashboardServer:
                             if not chunk:
                                 break
                             size += len(chunk)
+                            # A 500 MB upload is 8000 disk writes; keeping them
+                            # off the event loop is the difference between a
+                            # phone that stays responsive and one that freezes
+                            # while its own file is being saved.
+                            await asyncio.to_thread(fout.write, chunk)
                             if size > max_bytes:
                                 fout.close()
                                 dest.unlink(missing_ok=True)

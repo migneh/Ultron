@@ -80,15 +80,71 @@ def _extract_text_from_image(image_path: str) -> str:
         except Exception:
             pass
 
-    # Windows native OCR fallback via PowerShell
+    # Windows 10/11 ships an OCR engine. Fall back to it whenever pytesseract is
+    # absent — which is most Windows machines, since nobody installs Tesseract.
+    # (This used to build a PowerShell string and throw it away inside a try
+    # block that could not fail, so every Windows screen triage silently
+    # reported "no text".)
+    return _windows_ocr(image_path)
+
+
+# Runs Windows.Media.Ocr through PowerShell. The WinRT calls are async; the
+# AsTask/Await dance is what makes them synchronous from a script. Kept in one
+# string so it can be reviewed as a unit — none of this is reachable off Windows.
+_WINDOWS_OCR_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation.UniversalApiContract, ContentType=WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation.UniversalApiContract, ContentType=WindowsRuntime]
+$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime]
+
+$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and
+    $_.GetParameters().Count -eq 1 -and
+    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+})[0]
+
+function Await($op, $type) {
+    $task = $asTask.MakeGenericMethod($type).Invoke($null, @($op))
+    $task.Wait(20000) | Out-Null
+    $task.Result
+}
+
+$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+if ($null -eq $engine) { Write-Output ''; exit 0 }
+
+$file    = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($env:ULTRON_OCR_IMAGE)) ([Windows.Storage.StorageFile])
+$stream  = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+$bitmap  = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+$result  = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+Write-Output $result.Text
+"""
+
+
+def _windows_ocr(image_path: str, timeout: int = 30) -> str:
+    """Text from an image via the OS engine. Empty string on any failure.
+
+    Never raises: OCR is a best-effort step inside a diagnostic, and a failed
+    recogniser should degrade to "no text found", not take the triage down.
+    """
+    import subprocess
+    import sys
+
+    if sys.platform != "win32":
+        return ""
     try:
-        ps_script = f"""
-        Add-Type -AssemblyName System.Drawing
-        [Windows.Media.Ocr.OcrEngine, Windows.Foundation.UniversalApiContract, ContentType = WindowsRuntime] | Out-Null
-        """
+        env = dict(os.environ, ULTRON_OCR_IMAGE=str(image_path))
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-Command", _WINDOWS_OCR_SCRIPT],
+            capture_output=True, text=True, timeout=timeout, env=env,
+        )
+        if proc.returncode != 0:
+            return ""
+        return (proc.stdout or "").strip()
     except Exception:
-        pass
-    return ""
+        return ""
 
 
 def triage_screen_error() -> str:

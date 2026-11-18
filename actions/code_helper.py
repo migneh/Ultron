@@ -110,11 +110,9 @@ def _take_screenshot() -> Path | None:
         return None
 
 
-def _image_to_base64(path: Path) -> str:
-    import base64
-    return base64.b64encode(path.read_bytes()).decode("utf-8")
-
-
+# The intents the detector may return. (Lost for a moment when the dead
+# _image_to_base64() above it was removed with a too-wide slice — caught by
+# ruff's F821, which is why it is in the check set.)
 _VALID_INTENTS = {"write", "edit", "explain", "run", "build", "screen_debug", "optimize"}
 
 
@@ -463,8 +461,7 @@ def _screen_debug_action(description, file_path, player, speak=None) -> str:
     try:
         from google.genai import types
 
-        image_bytes  = screenshot_path.read_bytes()
-        image_base64 = _image_to_base64(screenshot_path)
+        image_bytes = screenshot_path.read_bytes()
 
         user_question = description or "What error or problem do you see on the screen? How can it be fixed?"
 

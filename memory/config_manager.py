@@ -253,6 +253,45 @@ def save_assistant_config(assistant_name: str, user_name: str) -> None:
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
 
+def get_currency_symbol() -> str:
+    """Currency symbol for money printed by tools (bounty_hunter, prices).
+
+    Hard-coding "$" meant a price detected as "Rs 80,000" was reported as
+    "$80,000" — the wrong number in the wrong currency. The symbol is now a
+    setting; a detected symbol always wins over it.
+    """
+    try:
+        from core import ui_currency
+        return ui_currency.normalise_symbol(load_api_keys().get("currency_symbol", ""))
+    except Exception:
+        return "$"
+
+
+def save_currency_symbol(symbol: str) -> str:
+    from core import ui_currency
+    value = ui_currency.normalise_symbol(symbol)
+    data, _ = _read_config_file()
+    data["currency_symbol"] = value
+    ensure_config_dir()
+    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    return value
+
+
+def save_wake_word(model: str, phrase: str) -> tuple[str, str]:
+    """Store the wake model and the phrase it actually detects, together."""
+    from core import wake_word as _wake
+    # Fall back to the built-in pair, not to whatever the module happens to be
+    # configured with: an empty save must not freeze the current setting in.
+    mdl = str(model or "").strip() or _wake.DEFAULT_MODEL
+    phr = str(phrase or "").strip() or _wake.DEFAULT_PHRASE
+    data, _ = _read_config_file()
+    data["wake_model"] = mdl
+    data["wake_phrase"] = phr
+    ensure_config_dir()
+    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    return mdl, phr
+
+
 def get_telegram_config() -> dict:
     """Return dict with telegram_bot_token, telegram_chat_id, and telegram_enabled."""
     cfg = load_api_keys()

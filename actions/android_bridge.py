@@ -103,7 +103,6 @@ def list_devices() -> str:
     code, out, err = _run_cmd([adb_bin, "devices", "-l"])
     fb_code, fb_out, fb_err = _run_cmd([fb_bin, "devices"])
 
-    lines = []
     # Parse ADB
     adb_devices = []
     if code == 0 and out:

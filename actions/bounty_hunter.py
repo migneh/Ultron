@@ -30,6 +30,31 @@ except ImportError:
 _BASE_DIR = Path(__file__).resolve().parent.parent
 _BOUNTIES_FILE = _BASE_DIR / "memory" / "bounty_targets.json"
 
+try:
+    from core import ui_currency
+except Exception:                               # pragma: no cover - core is always there
+    ui_currency = None
+
+
+def _sym_pick(detected: str = "") -> str:
+    """The symbol to print: what the page said, else the user's configured one."""
+    if detected:
+        return ui_currency.normalise_symbol(detected) if ui_currency else detected
+    if ui_currency is None:
+        return "$"
+    try:
+        from memory.config_manager import get_currency_symbol
+        return get_currency_symbol()
+    except Exception:
+        return "$"
+
+
+def _money(amount: float, symbol: str = "") -> str:
+    return ui_currency.money(amount, _sym_pick(symbol)) if ui_currency else f"${amount:,.2f}"
+
+
+_PRICE_RE = re.compile(r"(Rs\.?|[$€£₹¥])\s*([\d,]+(?:\.\d{2})?)")
+
 
 def _load_bounties() -> list[dict[str, Any]]:
     """Load tracked price targets."""
@@ -64,29 +89,31 @@ def hunt_price(product: str, target_price: float = 0.0, url: str = "") -> str:
 
     # Search for product pricing using DuckDuckGo HTML / ddgs
     found_price = 0.0
-    detected_title = clean_prod
+    found_symbol = ""            # what the page itself said, if anything
     link = url
 
     try:
         from actions.web_search import web_search
         search_res = web_search({"query": f"{clean_prod} price buy online"})
-        # Extract potential price matches like $1,299 or Rs 80,000
-        price_matches = re.findall(r"(?:[\$€£₹]|Rs\.?\s*)\s*([\d,]+(?:\.\d{2})?)", search_res)
-        if price_matches:
-            raw_p = price_matches[0].replace(",", "")
-            found_price = float(raw_p)
-            lines.append(f"• Detected Market Price: ${found_price:,.2f}")
+        # Keep the currency that was matched: a page quoting "Rs 74,999" used to
+        # be reported as "$74,999.00" — right digits, wrong money, stated as fact.
+        match = _PRICE_RE.search(search_res or "")
+        if match:
+            found_price = float(match.group(2).replace(",", ""))
+            found_symbol = match.group(1)
+            lines.append(f"• Detected Market Price: {_money(found_price, found_symbol)}")
         else:
             lines.append("• Market Price Probe: Market pricing indexed from online listings.")
     except Exception:
         lines.append("• Market Probe: Scraping live listings.")
 
     if target_price > 0:
-        lines.append(f"• Target Bounty Price:  ${target_price:,.2f}")
+        lines.append(f"• Target Bounty Price:  {_money(target_price, found_symbol)}")
         if found_price > 0 and found_price <= target_price:
             lines.append(f"• 🚨 BOUNTY ACQUIRED: Current price is below your target threshold!")
         elif found_price > 0:
-            lines.append(f"• Status: Active watch. Target is ${(found_price - target_price):,.2f} above threshold.")
+            lines.append(f"• Status: Active watch. Target is "
+                         f"{_money(found_price - target_price, found_symbol)} above threshold.")
 
     # Save to persistent bounties
     bounties = _load_bounties()
@@ -94,6 +121,7 @@ def hunt_price(product: str, target_price: float = 0.0, url: str = "") -> str:
         "product": clean_prod,
         "target_price": target_price,
         "last_price": found_price,
+        "currency": _sym_pick(found_symbol),
         "url": link,
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
@@ -138,8 +166,11 @@ def list_bounties() -> str:
         "─" * 55,
     ]
     for b in bounties[-8:]:
-        tp_str = f"Target: ${b['target_price']:,.2f}" if b.get('target_price') else "Price Tracking"
-        lines.append(f"• {b['product']} | {tp_str} | Last: ${b.get('last_price', 0):,.2f}")
+        sym = b.get("currency") or _sym_pick()
+        tp_str = (f"Target: {_money(b['target_price'], sym)}"
+                  if b.get('target_price') else "Price Tracking")
+        lines.append(f"• {b['product']} | {tp_str} | "
+                     f"Last: {_money(b.get('last_price', 0) or 0, sym)}")
     lines.append("─" * 55)
     return "\n".join(lines)
 
