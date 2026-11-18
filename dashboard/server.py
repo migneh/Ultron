@@ -1,9 +1,13 @@
 """
-dashboard/server.py — Ultron Local HTTP Dashboard
+dashboard/server.py — Ultron Local Dashboard
 
-Plain HTTP on port 8000 (no SSL warnings, no firewall issues).
-Security at the application layer: AES-256-CBC with session-key-derived key.
-CryptoJS is auto-downloaded once and served locally — no CDN needed after that.
+HTTPS on port 8000 (plus a second TLS port, PORT+1, for phones that type the
+address by hand) with a per-install self-signed certificate generated on first
+run — see _ensure_certs(). If no certificate can be produced or loaded, the
+server falls back to plain HTTP rather than not starting at all.
+Security is also enforced at the application layer: AES-256-CBC with a
+session-key-derived key. CryptoJS is auto-downloaded once and served locally —
+no CDN needed after that.
 
 Install deps:  pip install fastapi "uvicorn[standard]" cryptography
 """
@@ -14,6 +18,7 @@ import hashlib
 import re
 import secrets
 import socket
+import ssl
 import string
 import time
 from pathlib import Path
@@ -362,6 +367,63 @@ def _local_ip() -> str:
     return "127.0.0.1"
 
 
+def _cert_is_current(crt_p: Path) -> bool:
+    """False only when the certificate has provably expired.
+
+    A pair nobody can load is one problem; a pair that loads and is ten years
+    out of date is another — Chrome rejects it with NET::ERR_CERT_DATE_INVALID
+    and the user has no way to tell that from "the dashboard is broken".
+    """
+    try:
+        import datetime
+        from cryptography import x509
+        cert = x509.load_pem_x509_certificate(crt_p.read_bytes())
+    except Exception:
+        return True        # cannot tell (cryptography absent) — do not block HTTPS
+    expires = getattr(cert, "not_valid_after_utc", None) or getattr(cert, "not_valid_after", None)
+    if expires is None:
+        return True
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=datetime.timezone.utc)
+    return expires > datetime.datetime.now(datetime.timezone.utc)
+
+
+def _pair_loads(key_p: Path, crt_p: Path) -> tuple[bool, str]:
+    """Can Python actually start a TLS server with this key/cert pair?
+
+    This is the same call uvicorn makes (`load_cert_chain`), so a True here means
+    the server will start rather than fail a second later.
+    """
+    try:
+        ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(
+            certfile=str(crt_p), keyfile=str(key_p))
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+    if not _cert_is_current(crt_p):
+        return False, "certificate has expired"
+    return True, ""
+
+
+def _tls_pair() -> tuple[Path, Path] | None:
+    """The key/cert pair uvicorn can load, or None.
+
+    The single source of truth for "is HTTPS available?". Existence is not
+    proof: a half-written certificate passes `exists()` and then fails inside
+    uvicorn, which used to leave the dashboard dead for the whole session while
+    the UI kept handing out an https:// QR code for a port that refused
+    connections.
+    """
+    certs = BASE_DIR / "config" / "certs"
+    for key_name, crt_name in (("ultron.key", "ultron.crt"),
+                               ("jarvis.key", "jarvis.crt")):
+        key_p, crt_p = certs / key_name, certs / crt_name
+        if key_p.exists() and crt_p.exists():
+            ok, _reason = _pair_loads(key_p, crt_p)
+            if ok:
+                return key_p, crt_p
+    return None
+
+
 def _ensure_certs() -> bool:
     """
     Make sure config/certs holds a TLS key pair, generating a self-signed one the
@@ -374,16 +436,17 @@ def _ensure_certs() -> bool:
 
     Returns True when a usable pair exists afterwards; False leaves the caller on
     plain HTTP, which still works — the QR code simply encodes http:// instead.
+
+    An existing pair is used only if it actually loads. A corrupt, truncated or
+    expired pair is replaced rather than trusted: existence was the old test, and
+    a file that fails inside uvicorn is worse than no file at all.
     """
     certs = BASE_DIR / "config" / "certs"
-    key_p = certs / "ultron.key"
-    crt_p = certs / "ultron.crt"
-    if not (key_p.exists() and crt_p.exists()):
-        if (certs / "jarvis.key").exists() and (certs / "jarvis.crt").exists():
-            key_p = certs / "jarvis.key"
-            crt_p = certs / "jarvis.crt"
-    if key_p.exists() and crt_p.exists():
+    if _tls_pair() is not None:
         return True
+    stale = [n for n in ("ultron.crt", "jarvis.crt") if (certs / n).exists()]
+    if stale:
+        print(f"[Dashboard] {', '.join(stale)} could not be loaded — replacing it.")
 
     try:
         import datetime
@@ -521,9 +584,8 @@ class DashboardServer:
 
     @staticmethod
     def _ssl_enabled() -> bool:
-        certs = BASE_DIR / "config" / "certs"
-        return ((certs / "ultron.key").exists() and (certs / "ultron.crt").exists()) or \
-               ((certs / "jarvis.key").exists() and (certs / "jarvis.crt").exists())
+        """True only when a pair exists that uvicorn can actually load."""
+        return _tls_pair() is not None
 
     def get_url(self) -> str:
         proto = "https" if self._ssl_enabled() else "http"
@@ -1182,9 +1244,11 @@ class DashboardServer:
         """Second HTTPS server on PORT+1 sharing the same app and in-memory state.
         Chrome HTTPS-upgrades any bare IP:PORT the user types, so this port also needs TLS.
         User types IP:8001 → Chrome tries https → self-signed cert warning → accept once → done."""
-        certs = BASE_DIR / "config" / "certs"
-        ssl_key  = certs / "ultron.key" if (certs / "ultron.key").exists() else certs / "jarvis.key"
-        ssl_cert = certs / "ultron.crt" if (certs / "ultron.crt").exists() else certs / "jarvis.crt"
+        pair = _tls_pair()
+        if pair is None:
+            print(f"[Dashboard] Alias port {PORT + 1} skipped — no usable certificate.")
+            return
+        ssl_key, ssl_cert = pair
         asyncio.get_event_loop().run_in_executor(None, _ensure_network_access, PORT + 1)
         cfg = uvicorn.Config(
             self.app, host="0.0.0.0", port=PORT + 1, log_level="warning",
@@ -1209,10 +1273,9 @@ class DashboardServer:
         # Generate the TLS pair on first run so no private key ships in the repo.
         _ensure_certs()
 
-        use_ssl  = self._ssl_enabled()
-        certs    = BASE_DIR / "config" / "certs"
-        ssl_key  = certs / "ultron.key" if (certs / "ultron.key").exists() else certs / "jarvis.key"
-        ssl_cert = certs / "ultron.crt" if (certs / "ultron.crt").exists() else certs / "jarvis.crt"
+        pair = _tls_pair()
+        use_ssl = pair is not None
+        ssl_key, ssl_cert = pair if pair else (None, None)
 
         if use_ssl:
             # port+1 is the fallback phones are told to type manually; if it fails

@@ -497,3 +497,50 @@ config reports `PASS claude API key — present`.
   names; and an assertion that `main.py` and `llm_client` agree on the default provider.
 
 Suite: 117 tests.
+
+---
+
+# Pass 8 — the dashboard's certificate: existence is not proof
+
+Every install generates its own self-signed TLS pair on first run. Reproduced what a crash during
+that generation leaves behind — `ultron.crt` written halfway:
+
+```
+_ssl_enabled()  -> True      # the QR code keeps saying https://
+_ensure_certs() -> True      # nothing thinks there is a problem
+load_cert_chain -> SSLError: [SSL] PEM lib
+```
+
+uvicorn then refused to bind, the failure was a single stdout line (`Server on port 8000
+unavailable`), and the Remote Control panel went on handing out a URL for a port that answered
+nothing — for the rest of the session. Both checks asked `Path.exists()`.
+
+## What changed
+
+`_tls_pair()` is now the single answer to "is HTTPS available?": it finds a key/cert pair and
+proves it works with `ssl.SSLContext.load_cert_chain` — the same call uvicorn makes, so a True
+here means the server actually starts. `_ssl_enabled()`, `get_url()`, `get_manual_url()`,
+`_ensure_certs()`, `serve()` and the alias server all go through it, so the UI cannot advertise a
+port the server never bound.
+
+`_ensure_certs()` keeps a pair only if it loads, and regenerates otherwise — including when the
+certificate has expired. Expiry is a second, quieter failure: a pair can load perfectly and still
+be rejected by Chrome with `NET::ERR_CERT_DATE_INVALID`, which is indistinguishable from "the
+dashboard is broken" from the phone. Generated certs last ten years, so this only bites a
+hand-supplied certificate, but checking costs one parse.
+
+The legacy `jarvis.*` pair is still honoured, and now validated: if it is broken, `ultron.*` is
+generated beside it rather than handed to uvicorn.
+
+Also: the module docstring still described a plain-HTTP-only server. It now says what the code
+does.
+
+## Guards added
+
+- `tests/test_dashboard_certs.py` (14) — first run produces a pair that loads, 0600 on the key,
+  SAN covering `localhost` and `127.0.0.1`, a validity measured in years; half-written cert and
+  half-written key are neither trusted nor left in place; an expired certificate is replaced; the
+  legacy pair is honoured without generating a second one; and the URL helpers say `http://` when
+  the pair cannot be used.
+
+Suite: 131 tests.

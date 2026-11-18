@@ -65,6 +65,9 @@ Price matching handles `₹`/`€`/`£` input but the formatted output hardcodes
 
 - **Why deferred:** deliberate. Harmless reads that keep an already-paired phone working. Drop
   them once you are sure no device is holding an old session.
+- **Updated (HISTORY pass 8):** a legacy pair is now *validated* like a fresh one — if
+  `jarvis.crt`/`jarvis.key` cannot be loaded, `_ensure_certs()` generates `ultron.*` beside it
+  instead of handing a broken pair to uvicorn.
 
 ## 7. `pygetwindow` has no Linux backend
 
