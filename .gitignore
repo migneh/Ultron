@@ -10,6 +10,8 @@ config/whatsapp_web/
 
 # ── Personal Data & Storage ────────────────────────────────────────
 memory/long_term.json
+# Unreadable stores are set aside for inspection — still personal data.
+memory/*.corrupt-*.json
 memory/*.db
 memory/drone_reports/
 

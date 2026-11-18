@@ -52,8 +52,8 @@ from google.genai import types
 from ui import UltronUI
 from core.persona import address_line, normalize_language, speech_protocol
 from memory.memory_manager import (
-    load_memory, update_memory, format_memory_for_prompt,
-    save_session_summary, pop_last_session,
+    load_memory, format_memory_for_prompt,
+    save_session_summary, pop_last_session, remember,
     search_memory, set_trim_notifier,
 )
 
@@ -1644,7 +1644,7 @@ class UltronLive:
             key      = args.get("key", "")
             value    = args.get("value", "")
             if key and value:
-                update_memory({category: {key: {"value": value}}})
+                remember(category, key, value)
                 return f"Memory saved: {category}/{key}"
             return "No key/value provided."
 
@@ -1960,8 +1960,10 @@ class UltronLive:
             key      = args.get("key", "")
             value    = args.get("value", "")
             if key and value:
-                update_memory({category: {key: {"value": value}}})
-                print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
+                # remember() clamps an invented category into "notes"; writing
+                # the category straight through update_memory hid the fact from
+                # the prompt entirely (see _canonical_update).
+                print(f"[Memory] 💾 save_memory: {remember(category, key, value)}")
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
             return types.FunctionResponse(

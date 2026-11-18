@@ -361,3 +361,66 @@ localised dialog labels in `game_updater`, and the multilingual keyword list in
   line composition with and without a user name.
 
 Suite: 79 tests.
+
+---
+
+# Pass 6 — the memory store, i.e. the one file that is not replaceable
+
+`scripts/doctor.py` was run first, on a genuinely broken machine (no PortAudio, no DISPLAY, no
+libGL): it reported 4 FAILs, 17 WARNs and named every action file that failed to import, one per
+line. It is honest, so the first-run path was not where the bugs were. The memory store was.
+
+Everything below was reproduced against a temporary `long_term.json` before it was fixed.
+
+## A fact could be written, and then be invisible
+
+`save_memory` takes its category from the model as free text, and the handler passed it straight
+into `update_memory()`. Any category outside the six known ones became a new top-level key — and
+`format_memory_for_prompt()` reads only the known categories, for both the shown entries *and* the
+`[ALSO REMEMBERED]` index. Measured: `{"work": {"employer": ...}}` was written to disk, never
+appeared in the prompt, never appeared in the index, and could not be recalled unless the model
+happened to guess the keyword. The tool answered "ok". `remember()` had always clamped an unknown
+category into `notes`; `update_memory()` — the path the model actually reaches — did not.
+
+Now `update_memory()` canonicalises at the choke point (`_canonical_update`), so an invented
+category is kept as a `notes` entry: visible, indexed and recallable instead of silently dead.
+Both `main.py` handlers go through `remember()` as well.
+
+## `category="sessions"` destroyed the session summaries
+
+`sessions` is a *list* in the same file. Writing a dict into it replaced the list, and the next
+`save_session_summary()` saw a non-list, reset it to `[]`, and the previous summaries — the thing
+that makes the assistant remember yesterday — were gone. Reproduced: "Talked about the rover
+project" disappeared after one stray save. Canonical routing sends that key to `notes`, so the
+list cannot be overwritten.
+
+Related: a bare string for a whole category (`{"notes": "hates cilantro"}`) replaced that entire
+category. It now becomes a `note` entry and the rest of the category survives.
+
+## `recall_memory("sister_name")` answered "Nothing stored"
+
+The schema tells the model that keys are snake_case, and the prompt's index shows them humanised
+("sister name"). `search_memory()` split the query on non-word characters — and `_` counts as a
+word character — so the exact key scored zero against every entry:
+
+    recall('sister_name') -> "Nothing stored about 'sister_name'."
+    recall('sister')      -> "relationships/sister name: Ada"
+
+The lookup that exists to stop the assistant saying "I don't know" could be defeated by using the
+key it was handed. Underscores are now word separators in the query.
+
+## An unreadable store was deleted by the next save
+
+`load_memory()` returns empty memory when the JSON cannot be parsed — correct, the app must start
+— but the following save then wrote a fresh file over it. Any chance of salvaging the bytes by
+hand was gone. The unreadable file is now renamed to `long_term.corrupt-<timestamp>.json` and
+named in the log; a valid-but-wrong-shaped file (a list, a string) is treated the same way.
+`.gitignore` covers the backups because they are still personal data.
+
+## Guards added
+
+- `tests/test_memory_manager.py` (23) — category routing, session-list survival, bare-string
+  categories, key-vs-humanised recall, empty/wrong-shaped/corrupt stores, trim order and its
+  notification, `remember()`/`forget()`.
+
+Suite: 102 tests.

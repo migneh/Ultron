@@ -54,6 +54,29 @@ def _empty_memory() -> dict:
         "notes":         {},
     }
 
+# The categories memory is allowed to have. Anything else a caller (or a model)
+# invents is routed into "notes" by _canonical_update() — see there for why.
+CATEGORIES = frozenset(_empty_memory())
+
+
+def _quarantine_unreadable(path: Path) -> None:
+    """Move an unreadable store aside instead of letting the next save eat it.
+
+    Returning empty memory is the right behaviour for a corrupt file — the app
+    must still start — but the *next* save then overwrote the file with a fresh
+    one, so whatever could still have been salvaged by hand was gone. Renaming
+    keeps the bytes and lets the user (or a future repair pass) read them.
+    """
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = path.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}")
+    try:
+        path.rename(target)
+        print(f"[Memory] 🛟 Memory file was unreadable — kept as {target.name}, "
+              f"starting a fresh one.")
+    except OSError as e:
+        print(f"[Memory] ⚠️ Could not set aside {path.name}: {e}")
+
+
 def load_memory() -> dict:
     if not MEMORY_PATH.exists():
         return _empty_memory()
@@ -66,9 +89,12 @@ def load_memory() -> dict:
                     if key not in data:
                         data[key] = {}
                 return data
+            # Valid JSON, wrong shape (a list, a string) — same problem.
+            _quarantine_unreadable(MEMORY_PATH)
             return _empty_memory()
         except Exception as e:
             print(f"[Memory] ⚠️ Load error: {e}")
+            _quarantine_unreadable(MEMORY_PATH)
             return _empty_memory()
 
 def _all_entries(memory: dict) -> list[tuple]:
@@ -156,11 +182,41 @@ def _recursive_update(target: dict, updates: dict) -> bool:
     return changed
 
 
+def _canonical_update(update: dict) -> dict:
+    """Fold any category memory does not have into "notes".
+
+    `save_memory` takes its category from the model, as free text, and writes it
+    straight through `update_memory()`. Two things went wrong when that text was
+    unexpected, and both were silent:
+
+      * an invented category ("work", "hobbies") became a new top-level key,
+        which format_memory_for_prompt() never reads and never indexes — the
+        fact was written to disk and could not be seen or looked up, so the
+        assistant said "I don't know" while holding the answer;
+      * category="sessions" overwrote the session-summary list with a dict, and
+        the next save_session_summary() reset it to [] — the previous summaries
+        were gone.
+
+    Keeping the write inside the known categories fixes both without rejecting
+    the fact: "work/employer" becomes "notes/employer", which is visible.
+    """
+    out: dict = {}
+    for key, value in update.items():
+        cat = key if key in CATEGORIES else "notes"
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        if not isinstance(value, dict):
+            # A bare value for a whole category would have replaced it wholesale.
+            value = {"note": {"value": value}}
+        out.setdefault(cat, {}).update(value)
+    return out
+
+
 def update_memory(memory_update: dict) -> dict:
     if not isinstance(memory_update, dict) or not memory_update:
         return load_memory()
     memory = load_memory()
-    if _recursive_update(memory, memory_update):
+    if _recursive_update(memory, _canonical_update(memory_update)):
         save_memory(memory)
         print(f"[Memory] 💾 Saved: {list(memory_update.keys())}")
     return memory
@@ -353,7 +409,11 @@ def search_memory(query: str, limit: int = 8) -> str:
     An empty query is treated as "show me everything you know", capped - the
     model asks that when the user says "what do you remember about me?"."""
     memory = load_memory()
-    words  = [w for w in re.split(r"[^\w]+", (query or "").lower()) if len(w) > 1]
+    # Underscores are word separators, not letters: keys are stored snake_case
+    # ("sister_name") but shown and matched humanised ("sister name"), so a
+    # query for the exact key used to score zero and answer "Nothing stored".
+    words  = [w for w in re.split(r"[^\w]+", (query or "").lower().replace("_", " "))
+              if len(w) > 1]
 
     rows: list[tuple[int, str, str, str]] = []
     for cat, items in memory.items():
