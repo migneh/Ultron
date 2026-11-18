@@ -167,13 +167,40 @@ def check_config() -> None:
         return
     _emit("PASS", "config/api_keys.json parses")
 
-    provider = (cfg.get("ai_provider") or "gemini").strip().lower()
-    key = cfg.get(f"{provider}_api_key") or cfg.get("gemini_api_key") or ""
-    looks_real = key and not key.upper().startswith("YOUR_") and len(key) > 20
-    _emit("PASS" if looks_real else "FAIL",
-          f"{provider} API key",
-          "present" if looks_real else "missing or still the placeholder",
-          "" if looks_real else "get a free key at https://aistudio.google.com/app/apikey")
+    # The rules live in memory.config_manager — this used to be a third copy, and
+    # it read the key as f"{provider}_api_key", which is the wrong field for
+    # claude (anthropic_api_key), nvidia_nim (nvidia_api_key) and opencode_zen
+    # (opencode_api_key). A correctly configured Claude user was told their key
+    # was missing.
+    try:
+        sys.path.insert(0, str(ROOT))
+        from memory.config_manager import (get_ai_provider, get_provider_key,
+                                           is_configured, looks_like_placeholder)
+    except Exception as e:
+        _emit("FAIL", "cannot import memory.config_manager", str(e)[:100])
+        return
+
+    provider = get_ai_provider()
+    if not provider:
+        _emit("FAIL", "no ai_provider set",
+              "the app cannot tell which provider to use",
+              'set an "ai_provider" entry in config/api_keys.json, or'
+              "launch and let the setup screen write it")
+    elif provider == "ollama":
+        _emit("PASS", "provider: ollama", "local — no API key needed")
+    else:
+        key = get_provider_key(provider)
+        if looks_like_placeholder(key):
+            _emit("FAIL", f"{provider} API key",
+                  "missing or still the placeholder",
+                  "get a key at https://aistudio.google.com/app/apikey (Gemini) "
+                  "or re-run the setup screen")
+        else:
+            _emit("PASS", f"{provider} API key", "present")
+
+    if not is_configured():
+        _emit("WARN", "not usable yet",
+              "the setup screen will open on launch instead of starting a session")
 
     name = cfg.get("assistant_name") or "Ultron"
     user = cfg.get("user_name") or "Boss"

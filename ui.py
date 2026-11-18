@@ -6298,24 +6298,18 @@ class MainWindow(QMainWindow):
         self.hud.clear_active_task(success)
 
     def _check_config(self) -> bool:
-        if not API_FILE.exists(): return False
+        """Whether the app may start without the setup overlay.
+
+        The rules live in memory/config_manager.is_configured() — this used to be
+        a second copy of them, and the copy had drifted: it demanded `os_system`
+        (so a perfectly good config showed the setup overlay on every launch)
+        and accepted the example file's placeholder key as real.
+        """
+        if not API_FILE.exists():
+            return False
         try:
-            d = json.loads(API_FILE.read_text(encoding="utf-8"))
-            if not d.get("os_system"):
-                return False
-            provider = d.get("ai_provider", "").strip().lower()
-            if not provider:
-                return False
-            if provider == "ollama":
-                return True
-            key = (
-                d.get(f"{provider}_api_key") or
-                d.get(f"{provider}_key") or
-                d.get("api_key") or
-                (d.get("gemini_api_key") if provider == "gemini" else "") or
-                (d.get("openai_api_key") if provider == "gpt" else "")
-            )
-            return bool(key and len(str(key).strip()) > 3)
+            from memory.config_manager import is_configured
+            return is_configured()
         except Exception:
             return False
 
@@ -6351,6 +6345,13 @@ class MainWindow(QMainWindow):
         current["ai_model"] = model
         current["os_system"] = os_name
         current["assistant_name"] = current.get("assistant_name") or "Ultron"
+
+        # The overlay's own field names are transport, not config. Leaving them
+        # behind put two names for the same setting in one file, which is exactly
+        # how the README's `provider` came to be silently ignored while the code
+        # asked for `ai_provider`.
+        for transient in ("provider", "model"):
+            current.pop(transient, None)
 
         if provider == "gemini":
             current["gemini_api_key"] = key

@@ -64,20 +64,22 @@ cp config/api_keys.json.example config/api_keys.json
 
 ```json
 {
-  "assistant_name": "Ultron",
-  "user_name": "Boss",
+  "ai_provider": "gemini",
+  "ai_model": "gemini-2.5-flash",
   "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE",
-  "provider": "gemini",
-  "model": "models/gemini-2.0-flash-exp",
-  "ui_color": "#ff0008",
-  "voice_name": "Ultron",
-  "voice_rate": "+15%",
-  "camera_index": 0
+  "assistant_name": "Ultron",
+  "user_name": ""
 }
 ```
 
+`ai_provider` and `ai_model` are the names the app reads — `provider` and `model` are not
+aliases for them. Whatever you do, replace the placeholder key: it is recognised as a
+placeholder, so leaving it in makes the app treat itself as unconfigured and open the setup
+screen rather than starting and failing with an auth error later.
+
 `config/api_keys.json` is git-ignored. Alternatively, launch without it and the setup screen
-will ask for the key on first run.
+will write this file for you — that path is the one to prefer if you use Claude, NVIDIA NIM,
+OpenCode Zen or a local Ollama, since it stores each provider's key under its own name.
 
 ### 4. Launch
 

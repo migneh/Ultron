@@ -1,13 +1,12 @@
 {
-    "assistant_name": "Ultron",
+    "ai_provider": "gemini",
+    "ai_model": "gemini-2.5-flash",
     "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE",
-    "os_system": "windows",
-    "provider": "gemini",
-    "model": "models/gemini-2.0-flash-exp",
+    "assistant_name": "Ultron",
+    "user_name": "",
+    "ui_color": "#ff0008",
     "voice_name": "Ultron",
     "voice_rate": "+15%",
-    "user_name": "Boss",
-    "ui_color": "#ff0008",
     "ultron_voice_warp": true,
     "camera_index": 0
 }

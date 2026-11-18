@@ -424,3 +424,76 @@ named in the log; a valid-but-wrong-shaped file (a list, a string) is treated th
   notification, `remember()`/`forget()`.
 
 Suite: 102 tests.
+
+---
+
+# Pass 7 — the first five minutes: config, keys and the setup gate
+
+The README's quickstart says `cp config/api_keys.json.example config/api_keys.json` and paste your
+key. Reproduced exactly that: the resulting file left `get_ai_provider()` returning `""` and
+`is_configured()` returning `False`. Following the instructions produced a config the app does not
+believe in.
+
+## The example file and the README described a schema nothing reads
+
+They said `"provider": "gemini"` and `"model": ...`. The code asks for `ai_provider` and
+`ai_model`. There is no alias — the example was simply wrong, which is why the setup overlay
+appeared even after a correct-looking copy. Both the file and the README block now carry the real
+names, and say plainly that they are not aliases.
+
+`ui._on_setup_done()` also wrote its overlay's transport keys (`provider`, `model`) into the config
+alongside the canonical ones, which is how a second name for the same setting got established in
+the first place. They are dropped before the file is written.
+
+## A placeholder counted as a working key
+
+The "may we start?" test was `len(key) > 3`, so the shipped placeholder
+`YOUR_GEMINI_API_KEY_HERE` passed it. The app started normally, then met "API key not valid" out
+loud — mid-sentence, after the greeting. `looks_like_placeholder()` now recognises the strings we
+ship and the shapes people type (`your_…`, `<…>`, `changeme`, `xxxxxx`, `example`), so an
+untouched key means "not configured" and the setup screen appears instead.
+
+## Three providers could never be configured
+
+`get_provider_key()` derived the field name as `f"{provider}_api_key"`. The setup screen writes
+`anthropic_api_key` for Claude, `nvidia_api_key` for NVIDIA NIM and `opencode_api_key` for
+OpenCode Zen. So for those three the key was saved, never found, the config reported itself
+unconfigured on every launch — and every request would have gone out with an empty key. A
+`_PROVIDER_KEY_FIELDS` map now matches what is written, and `llm_client` (which calls the same
+function) is fixed by the same change.
+
+## The gate demanded `os_system`, which nothing needs
+
+Every consumer already falls back to platform detection (`config.get_os()`,
+`actions/computer_control.py`, `screen_processor`, `send_message`). Requiring it in the gate meant
+a good config without that key re-opened the setup overlay *on every launch*. It is no longer
+required.
+
+## One rule, three copies — and they had drifted
+
+`config_manager.is_configured()`, `ui._check_config()` and `scripts/doctor.py` each implemented
+"is this configured?" separately. `is_configured()` had no callers at all; the other two had
+diverged from it (one demanded `os_system`, the other read the wrong key field for exactly the
+three providers above — a correctly configured Claude user was told their key was missing). Now
+`ui._check_config()` delegates to `is_configured()`, and `doctor.py` delegates to
+`is_configured()` + `looks_like_placeholder()`. Verified on a real run: a copied example reports
+`FAIL gemini API key — missing or still the placeholder` plus `WARN not usable yet`, and a Claude
+config reports `PASS claude API key — present`.
+
+## Two smaller ones on the same path
+
+- `get_ai_model()` returned `""` for a whitespace-only `ai_model` (the truthiness test ran before
+  `.strip()`), which put an empty model name on a provider that has a default.
+- `main.py`'s unified and Telegram paths fell back to `"ollama"` when no provider was set, while
+  `llm_client` and `get_provider_key()` fall back to `"gemini"`. A user with a Gemini key and no
+  provider name was silently pointed at a local server that is not running. Both sites now say
+  `"gemini"`.
+
+## Guards added
+
+- `tests/test_config_manager.py` (15) — the shipped example is a config the code understands and
+  is not mistaken for a working key; the configured/unconfigured matrix; per-provider key lookup
+  for all eight providers the setup screen offers; placeholder recognition; whitespace model
+  names; and an assertion that `main.py` and `llm_client` agree on the default provider.
+
+Suite: 117 tests.

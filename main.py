@@ -803,8 +803,11 @@ class UltronLive:
         """Execute command received from Telegram phone client and return reply text."""
         from core import llm_client
         from memory.config_manager import get_ai_provider, get_ai_model
-        provider = get_ai_provider() or "ollama"
-        model = get_ai_model() or "gemma4:31b-cloud"
+        # "gemini", not "ollama": a config with a key but no provider name
+        # must not silently target a local Ollama that is not running, while
+        # the rest of the app (llm_client, get_provider_key) assumes Gemini.
+        provider = get_ai_provider() or "gemini"
+        model = get_ai_model()
 
         print(f"[Telegram] Remote command from Boss: '{text}'")
         self.ui.write_log(f"Telegram (Boss): {text}")
@@ -1190,8 +1193,11 @@ class UltronLive:
     async def _handle_unified_text_command(self, text: str):
         from core import llm_client
         from memory.config_manager import get_ai_provider, get_ai_model, get_user_name
-        provider = get_ai_provider() or "ollama"
-        model = get_ai_model() or "gemma4:31b-cloud"
+        # "gemini", not "ollama": a config with a key but no provider name
+        # must not silently target a local Ollama that is not running, while
+        # the rest of the app (llm_client, get_provider_key) assumes Gemini.
+        provider = get_ai_provider() or "gemini"
+        model = get_ai_model()
 
         self.ui.set_state("THINKING")
         self.ui.set_active_task("neural_cognition", label="NEURAL COGNITION // ANALYZING DIRECTIVE")

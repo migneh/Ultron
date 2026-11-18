@@ -54,8 +54,12 @@ def get_ai_model() -> str:
     """Return configured AI model name for the current provider."""
     cfg = load_api_keys()
     provider = get_ai_provider()
-    if "ai_model" in cfg and cfg["ai_model"]:
-        return str(cfg["ai_model"]).strip()
+    if "ai_model" in cfg:
+        # Strip first: a whitespace-only value is truthy but empty, and used to
+        # be returned as "" — an unnameable model on a provider that has one.
+        model = str(cfg["ai_model"] or "").strip()
+        if model:
+            return model
     # Provider-specific fallbacks
     defaults = {
         "gemini": "gemini-2.5-flash",
@@ -70,16 +74,34 @@ def get_ai_model() -> str:
     }
     return defaults.get(provider, "gemini-2.5-flash")
 
+# Where each provider's key is actually stored. The setup screen
+# (ui._on_setup_done) writes these names, so reading them keeps the writer and the
+# reader in agreement. Deriving the field as f"{provider}_api_key" only works for
+# providers whose id happens to match their vendor: it missed anthropic_api_key
+# for "claude", nvidia_api_key for "nvidia_nim" and opencode_api_key for
+# "opencode_zen", so those three were saved, reported as unconfigured, and every
+# call was made with an empty key.
+_PROVIDER_KEY_FIELDS = {
+    "gemini":       "gemini_api_key",
+    "gpt":          "openai_api_key",
+    "claude":       "anthropic_api_key",
+    "nvidia_nim":   "nvidia_api_key",
+    "opencode_zen": "opencode_api_key",
+    "deepseek":     "deepseek_api_key",
+    "groq":         "groq_api_key",
+    "openrouter":   "openrouter_api_key",
+}
+
+
 def get_provider_key(provider: str = "") -> str:
     """Retrieve the API key for the specified provider (or the active provider if empty)."""
     cfg = load_api_keys()
     p = (provider or get_ai_provider() or "gemini").lower()
     return (
+        cfg.get(_PROVIDER_KEY_FIELDS.get(p, "")) or
         cfg.get(f"{p}_api_key") or
         cfg.get(f"{p}_key") or
         cfg.get("api_key") or
-        (cfg.get("gemini_api_key") if p == "gemini" else "") or
-        (cfg.get("openai_api_key") if p == "gpt" else "") or
         ""
     ).strip()
 
@@ -129,17 +151,42 @@ def save_ai_provider(provider: str, model: str, api_key: str = "", base_url: str
             data["llm_model"] = model.strip()
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
+# The strings the shipped example file and the setup screen use, plus the shapes
+# people type by hand. A key that matches one of these is not a key: accepting it
+# meant the app started happily and then met "API key not valid" mid-sentence,
+# instead of asking for a real key up front.
+_PLACEHOLDER_MARKERS = (
+    "your_", "your-", "your key", "<", "replace_me", "replace-me",
+    "paste_", "changeme", "change_me", "api_key_here", "xxxxxx", "example",
+)
+
+
+def looks_like_placeholder(value: str | None) -> bool:
+    """True for empty/example keys — i.e. "the user has not put one in yet"."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return True
+    return any(marker in text for marker in _PLACEHOLDER_MARKERS)
+
+
 def is_configured() -> bool:
+    """Can the app start a session with this config?
+
+    `os_system` is deliberately NOT required: every consumer already falls back
+    to platform detection (config.get_os(), actions/computer_control.py,
+    screen_processor, send_message). Demanding it meant a config that had a
+    working provider and key was reported as unconfigured, and the user was
+    shown the setup overlay on every single launch.
+    """
     cfg = load_api_keys()
-    if not cfg or not cfg.get("os_system"):
+    if not cfg:
         return False
     provider = cfg.get("ai_provider", "").strip().lower()
     if not provider:
         return False
     if provider == "ollama":
-        return True
-    key = get_provider_key(provider)
-    return bool(key and len(key) > 3)
+        return True                       # local: no key involved
+    return not looks_like_placeholder(get_provider_key(provider))
 
 
 def get_assistant_name() -> str:
