@@ -109,7 +109,7 @@ def main() -> None:
             "native tools. Install the ones you'll use via your package manager:\n"
             "    • volume      → pulseaudio-utils   (pactl)\n"
             "    • brightness  → brightnessctl\n"
-            "    • reminders   → systemd (systemd-run) or 'at'\n"
+            "    • reminders   → systemd user timers (systemctl --user)\n"
             "    • open URLs   → xdg-utils          (xdg-open)"
         )
     elif OS == "Darwin":

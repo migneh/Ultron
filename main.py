@@ -649,6 +649,9 @@ class UltronLive:
         self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
 
+        from core.tool_observability import bind_registries
+        bind_registries(self._action_registry, self._plugin_registry)
+
         # Project Prometheus: connect live registries for zero-restart dynamic evolution
         try:
             from actions.self_evolution import set_live_registries
@@ -832,10 +835,10 @@ class UltronLive:
                         except Exception:
                             fn_args = {}
                     self.ui.write_log(f"SYS: Telegram calling tool '{fn_name}'...")
-                    self.ui.set_active_task(fn_name, details=str(fn_args))
+                    self.ui.set_active_task(fn_name, details="Arguments omitted from diagnostics")
                     try:
                         tool_res = self._execute_tool_sync(fn_name, fn_args)
-                        self.ui.set_active_task(fn_name, label="TELEGRAM // SYNTHESIZING REPORT", details=str(fn_args))
+                        self.ui.set_active_task(fn_name, label="TELEGRAM // SYNTHESIZING REPORT", details="Arguments omitted from diagnostics")
                         followup = llm_client.call_unified(
                             prompt_or_messages=(
                                 f"Remote directive from Boss via Telegram: {text}\n"
@@ -1311,15 +1314,15 @@ class UltronLive:
                             }))
                         except Exception:
                             pass
-                    print(f"[Ultron] Executing tool: '{fn_name}' with args: {fn_args}")
-                    self.ui.set_active_task(fn_name, details=str(fn_args))
+                    print("[Ultron] Executing registered tool (arguments omitted)")
+                    self.ui.set_active_task(fn_name, details="Arguments omitted from diagnostics")
                     tool_res = await loop.run_in_executor(
                         None,
                         lambda: self._execute_tool_sync(fn_name, fn_args)
                     )
-                    print(f"[Ultron] Tool '{fn_name}' output: {str(tool_res)[:100]}")
+                    print("[Ultron] Tool response ready (result omitted from diagnostics)")
                     # Keep HUD animation active! Update label during follow-up synthesis
-                    self.ui.set_active_task(fn_name, label="NEURAL SYNTHESIS // COMPILING DIRECTIVE REPORT", details=str(fn_args))
+                    self.ui.set_active_task(fn_name, label="NEURAL SYNTHESIS // COMPILING DIRECTIVE REPORT", details="Arguments omitted from diagnostics")
                     followup = await loop.run_in_executor(
                         None,
                         lambda: llm_client.call_unified(
@@ -1743,7 +1746,7 @@ class UltronLive:
             res = self._plugin_registry.run(target_name, args, player=self.ui, session_memory=None)
             return res or "Done."
 
-        return f"Tool '{name}' executed."
+        return "Tool [UNAVAILABLE]: no registered dispatcher matched; nothing executed by this fallback."
 
     def _tail_active(self) -> bool:
         """True while the speakers may still be finishing our last sentence."""
@@ -1984,9 +1987,9 @@ class UltronLive:
         name = fc.name
         args = dict(fc.args or {})
 
-        print(f"[ULTRON] 🔧 {name}  {args}")
+        print("[ULTRON] Tool dispatch requested (arguments omitted)")
         self.ui.set_state("THINKING")
-        self.ui.set_active_task(name, details=str(args))
+        self.ui.set_active_task(name, details="Arguments omitted from diagnostics")
 
 
         if name == "save_memory":
@@ -1995,7 +1998,7 @@ class UltronLive:
             value    = args.get("value", "")
             if key and value:
                 update_memory({category: {key: {"value": value}}})
-                print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
+                print("[Memory] save_memory completed (content omitted)")
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
             return types.FunctionResponse(
@@ -2133,14 +2136,14 @@ class UltronLive:
 
         # In Gemini Live mode, retain active task animation until live speech starts!
         if not str(result).startswith("Tool '"):
-            self.ui.set_active_task(name, label=f"SYNTHESIS // STREAMING {name.upper()}", details=str(args))
+            self.ui.set_active_task(name, label=f"SYNTHESIS // STREAMING {name.upper()}", details="Arguments omitted from diagnostics")
         else:
             self.ui.clear_active_task(success=False)
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
 
 
-        print(f"[ULTRON] 📤 {name} → {str(result)[:80]}")
+        print("[ULTRON] Tool response ready (result omitted from diagnostics)")
 
         # A tool that declared itself NON_BLOCKING also says when its answer may
         # re-enter the conversation. Without this the model finishes whatever it
@@ -3076,6 +3079,8 @@ class UltronLive:
             show = self.ui.show_confirm,
             hide = self.ui.hide_confirm,
             log  = self.ui.write_log,
+            show_with_id = self.ui.show_confirm,
+            hide_with_id = self.ui.hide_confirm,
         )
         set_trim_notifier(self.ui.write_log)
 
