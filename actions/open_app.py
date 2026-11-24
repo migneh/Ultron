@@ -1,4 +1,5 @@
 import time
+import os
 import subprocess
 import platform
 import shutil
@@ -78,12 +79,14 @@ def _normalize(raw: str) -> str:
     return raw  
 
 def _launch_windows(app_name: str) -> bool:
+    if not app_name or any(c in app_name for c in '\r\n\x00&|<>`'):
+        return False
 
     if shutil.which(app_name) or shutil.which(app_name.split(".")[0]):
         try:
             subprocess.Popen(
-                app_name,
-                shell=True,
+                [app_name],
+                shell=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -94,7 +97,7 @@ def _launch_windows(app_name: str) -> bool:
 
     if ":" in app_name:
         try:
-            subprocess.Popen(f"start {app_name}", shell=True)
+            os.startfile(app_name)
             time.sleep(1.0)
             return True
         except Exception:

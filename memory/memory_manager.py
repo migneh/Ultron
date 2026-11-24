@@ -1,9 +1,22 @@
 import json
 import re
 from datetime import datetime
-from threading import Lock
+from threading import RLock
 from pathlib import Path
 import sys
+import os
+import tempfile
+from copy import deepcopy
+from functools import wraps
+
+
+def _serialized(fn):
+    """Serialize read-modify-write operations, not just individual I/O calls."""
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        with _lock:
+            return fn(*args, **kwargs)
+    return wrapped
 
 
 def get_base_dir() -> Path:
@@ -14,7 +27,7 @@ def get_base_dir() -> Path:
 
 BASE_DIR         = get_base_dir()
 MEMORY_PATH      = BASE_DIR / "memory" / "long_term.json"
-_lock            = Lock()
+_lock            = RLock()
 MAX_VALUE_LENGTH = 380
 
 # ── Why there are two very different numbers here ────────────────────────────
@@ -151,10 +164,17 @@ def save_memory(memory: dict) -> None:
     memory = _trim_to_limit(memory)
     MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _lock:
-        MEMORY_PATH.write_text(
-            json.dumps(memory, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        # Replace atomically: readers never see a partially written JSON file.
+        fd, name = tempfile.mkstemp(dir=MEMORY_PATH.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(memory, stream, indent=2, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(name, MEMORY_PATH)
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
 
 
 def _truncate_value(val: str) -> str:
@@ -181,19 +201,24 @@ def _recursive_update(target: dict, updates: dict) -> bool:
             # Preserve existing confidence/source when overwriting a value,
             # unless the update explicitly supplies new ones.
             existing = target.get(key, {})
+            supplied = value if isinstance(value, dict) else {}
+            previous = existing if isinstance(existing, dict) else {}
             entry = {
+                **previous,
+                **supplied,
                 "value": new_val,
                 "updated": datetime.now().strftime("%Y-%m-%d"),
-                "confidence": value.get("confidence", existing.get("confidence", CONF_HIGH) if isinstance(existing, dict) else CONF_HIGH),
-                "source": value.get("source", existing.get("source") if isinstance(existing, dict) else None),
-                "feedback": {"helpful": 0, "not_helpful": 0, "corrections": []},
+                "confidence": supplied.get("confidence", previous.get("confidence", CONF_HIGH)),
+                "source": supplied.get("source", previous.get("source")),
+                "feedback": deepcopy(supplied.get("feedback", previous.get("feedback", {"helpful": 0, "not_helpful": 0, "corrections": []}))),
             }
-            if not isinstance(existing, dict) or existing.get("value") != new_val:
+            if existing != entry:
                 target[key] = entry
                 changed = True
     return changed
 
 
+@_serialized
 def update_memory(memory_update: dict) -> dict:
     if not isinstance(memory_update, dict) or not memory_update:
         return load_memory()
@@ -203,7 +228,7 @@ def update_memory(memory_update: dict) -> dict:
         print(f"[Memory] 💾 Saved: {list(memory_update.keys())}")
         # ── Graph integration: every key-value save also becomes a graph node ──
         try:
-            _sync_memory_to_graph(memory_update)
+            _sync_memory_to_graph(memory)
         except Exception:
             # Graph sync must never block a memory write
             pass
@@ -213,7 +238,7 @@ def update_memory(memory_update: dict) -> dict:
 def _graph_enabled() -> bool:
     """Check if cerebro_graph is importable (numpy available)."""
     try:
-        import cerebro_graph  # noqa: F401
+        from memory import cerebro_graph  # noqa: F401
         return True
     except Exception:
         return False
@@ -459,7 +484,7 @@ def search_memory(query: str, limit: int = 8) -> str:
 
     rows: list[tuple[int, str, str, str]] = []
     for cat, items in memory.items():
-        if not isinstance(items, dict):
+        if cat == _PENDING_SECTION or not isinstance(items, dict):
             continue                     # skip 'sessions', which is a list
         for key, entry in items.items():
             val = _entry_value(entry)
@@ -501,11 +526,18 @@ def semantic_search_memory(query: str, top_k: int = 5) -> str:
         return search_memory(query, limit=top_k)
 
     lines = []
+    current_memory = load_memory()
     for r in graph_results:
         props = r.get("properties", {})
         val = props.get("value", "")
         cat = props.get("category", "unknown")
         key = props.get("key", r.get("entity", ""))
+        # The JSON store is authoritative: never recall deleted, pending,
+        # replaced or stale memory graph snapshots.
+        if cat == _PENDING_SECTION or key not in current_memory.get(cat, {}):
+            continue
+        if _entry_value(current_memory[cat][key]) != str(val):
+            continue
         score = r.get("relevance_score", 0)
         conf = props.get("confidence", "high")
         conf_mark = {"high": "●", "medium": "◐", "low": "○"}.get(conf, "●")
@@ -517,6 +549,8 @@ def semantic_search_memory(query: str, top_k: int = 5) -> str:
                 direction = "→" if c["direction"] == "out" else "←"
                 lines.append(f"      {direction} {c['relation']} {c.get('target', c.get('source', ''))}")
 
+    if not lines:
+        return search_memory(query, limit=top_k)
     head = f"Semantic matches for '{query}':"
     return head + "\n" + "\n".join(lines)
 
@@ -528,13 +562,10 @@ def get_graph_relationships(category: str, key: str) -> list[dict]:
     cg = _get_graph()
     entity = f"{category}/{key}"
     try:
-        results = cg.semantic_query(entity, top_k=1, depth=2)
+        connections = cg.get_connections(entity, depth=2)
+        return list(connections) if isinstance(connections, list) else []
     except Exception:
         return []
-    if not results:
-        return []
-    conns = results[0].get("connections", [])
-    return conns if isinstance(conns, list) else []
 
 
 # ── Feedback tracking ─────────────────────────────────────────────────────────
@@ -548,37 +579,46 @@ def _ensure_feedback_fields(entry: dict) -> dict:
     return entry
 
 
+@_serialized
 def feedback_helpful(category: str, key: str) -> str:
     """Record that the user found a memory helpful (thumbs up)."""
     memory = load_memory()
     cat = memory.get(category, {})
     if not isinstance(cat, dict) or key not in cat:
         return f"Not found: {category}/{key}"
-    entry = _ensure_feedback_fields(cat[key])
+    entry = cat[key] if isinstance(cat[key], dict) else {"value": str(cat[key])}
+    cat[key] = entry
+    entry = _ensure_feedback_fields(entry)
     entry["feedback"]["helpful"] += 1
     update_memory({category: {key: cat[key]}})
     return f"Marked helpful: {category}/{key}"
 
 
+@_serialized
 def feedback_not_helpful(category: str, key: str) -> str:
     """Record that the user found a memory unhelpful (thumbs down)."""
     memory = load_memory()
     cat = memory.get(category, {})
     if not isinstance(cat, dict) or key not in cat:
         return f"Not found: {category}/{key}"
-    entry = _ensure_feedback_fields(cat[key])
+    entry = cat[key] if isinstance(cat[key], dict) else {"value": str(cat[key])}
+    cat[key] = entry
+    entry = _ensure_feedback_fields(entry)
     entry["feedback"]["not_helpful"] += 1
     update_memory({category: {key: cat[key]}})
     return f"Marked not helpful: {category}/{key}"
 
 
+@_serialized
 def feedback_correct(category: str, key: str, correction: str) -> str:
     """Record a user correction for a memory value and update it."""
     memory = load_memory()
     cat = memory.get(category, {})
     if not isinstance(cat, dict) or key not in cat:
         return f"Not found: {category}/{key}"
-    entry = _ensure_feedback_fields(cat[key])
+    entry = cat[key] if isinstance(cat[key], dict) else {"value": str(cat[key])}
+    cat[key] = entry
+    entry = _ensure_feedback_fields(entry)
     entry["feedback"]["corrections"].append({
         "old": entry.get("value", ""),
         "new": correction,
@@ -656,6 +696,7 @@ def export_memories() -> str:
     return json.dumps(memory, indent=2, ensure_ascii=False)
 
 
+@_serialized
 def import_memories(json_text: str, merge: bool = True) -> str:
     """Import memories from a JSON string.
 
@@ -671,10 +712,32 @@ def import_memories(json_text: str, merge: bool = True) -> str:
         return "Import failed: top-level must be a JSON object"
 
     valid_cats = {"identity", "preferences", "projects", "relationships", "wishes", "notes", _PENDING_SECTION}
-    cleaned = {}
+    cleaned: dict[str, dict] = {}
     for cat in valid_cats:
-        if cat in data and isinstance(data[cat], dict):
-            cleaned[cat] = data[cat]
+        if cat not in data:
+            continue
+        if not isinstance(data[cat], dict):
+            return f"Import failed: category {cat} must be an object"
+        cleaned[cat] = {}
+        for key, entry in data[cat].items():
+            if not isinstance(entry, (str, dict)):
+                return f"Import failed: invalid entry {cat}/{key}"
+            if isinstance(entry, dict):
+                if not isinstance(entry.get("value"), str):
+                    return f"Import failed: {cat}/{key} must contain a string value"
+                if entry.get("confidence", CONF_HIGH) not in (CONF_HIGH, CONF_MEDIUM, CONF_LOW):
+                    return f"Import failed: invalid confidence in {cat}/{key}"
+                if not isinstance(entry.get("updated", ""), str):
+                    return f"Import failed: invalid date in {cat}/{key}"
+                if entry.get("source") is not None and not isinstance(entry["source"], str):
+                    return f"Import failed: invalid source in {cat}/{key}"
+                feedback = entry.get("feedback", {})
+                if (not isinstance(feedback, dict)
+                    or any(not isinstance(feedback.get(k, 0), int) or feedback.get(k, 0) < 0
+                           for k in ("helpful", "not_helpful"))
+                    or not isinstance(feedback.get("corrections", []), list)):
+                    return f"Import failed: invalid feedback in {cat}/{key}"
+            cleaned[cat][key] = entry
 
     if merge:
         memory = load_memory()
@@ -704,7 +767,7 @@ def all_entries_for_ui() -> list[dict]:
     memory = load_memory()
     rows = []
     for cat, items in memory.items():
-        if not isinstance(items, dict):
+        if cat == _PENDING_SECTION or not isinstance(items, dict):
             continue
         for key, entry in items.items():
             val = _entry_value(entry)
@@ -764,6 +827,7 @@ def get_pending_review() -> list[dict]:
     return rows
 
 
+@_serialized
 def confirm_pending(key: str) -> str:
     """Move a pending memory from _pending into its proper category (inferred from key prefix)."""
     memory = load_memory()
@@ -786,9 +850,11 @@ def confirm_pending(key: str) -> str:
         memory[category] = {}
     memory[category][real_key] = entry
     save_memory(memory)
+    _sync_memory_to_graph({category: {real_key: entry}})
     return f"Confirmed: {category}/{real_key} = {entry.get('value', '')}"
 
 
+@_serialized
 def dismiss_pending(key: str) -> str:
     """Remove a pending memory without saving it."""
     memory = load_memory()
@@ -894,6 +960,7 @@ def _save_if_new(category: str, key: str, value: str,
     return True
 
 
+@_serialized
 def extract_and_save_memory(text: str, user_name: str | None = None) -> list[dict]:
     """
     Scan a user utterance for memory-worthy personal facts and save them
@@ -1007,6 +1074,7 @@ def extract_and_save_memory(text: str, user_name: str | None = None) -> list[dic
     return saved
 
 
+@_serialized
 def forget(key: str, category: str = "notes") -> str:
     memory = load_memory()
     cat    = memory.get(category, {})
@@ -1014,6 +1082,10 @@ def forget(key: str, category: str = "notes") -> str:
         del cat[key]
         memory[category] = cat
         save_memory(memory)
+        try:
+            _get_graph().delete_node(f"{category}/{key}")
+        except Exception:
+            pass
         return f"Forgotten: {category}/{key}"
     return f"Not found: {category}/{key}"
 
@@ -1026,6 +1098,7 @@ forget_memory = forget
 _SESSION_MAX = 3   # safety cap — in practice 0-1 entries after pop
 
 
+@_serialized
 def save_session_summary(summary: str, language: str = "") -> None:
     """Append a 1-2 sentence session summary to long_term.json['sessions']."""
     summary = (summary or "").strip()
@@ -1045,10 +1118,17 @@ def save_session_summary(summary: str, language: str = "") -> None:
     memory["sessions"] = sessions[-_SESSION_MAX:]
     with _lock:
         MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        MEMORY_PATH.write_text(
-            json.dumps(memory, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        # Replace atomically: readers never see a partially written JSON file.
+        fd, name = tempfile.mkstemp(dir=MEMORY_PATH.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(memory, stream, indent=2, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(name, MEMORY_PATH)
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
     print(f"[Memory] 📝 Session saved ({entry['date']}): {summary[:60]}…")
 
 

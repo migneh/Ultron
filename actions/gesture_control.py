@@ -32,6 +32,8 @@ _LAST_GESTURE_NAME = "None"
 _LAST_GESTURE_TIME = 0.0
 _GESTURE_COOLDOWN = 1.2  # seconds between triggering actions
 _CAMERA_INDEX = 0
+_LIFECYCLE_LOCK = threading.Lock()
+_STOP_EVENT = threading.Event()
 
 # Callback hooks
 _ON_GESTURE_CALLBACK: Optional[Callable[[str], None]] = None
@@ -240,6 +242,7 @@ def _gesture_loop() -> None:
     try:
         cap = cv2.VideoCapture(_CAMERA_INDEX, cv2.CAP_DSHOW if _OS == "Windows" else cv2.CAP_ANY)
         if not cap.isOpened():
+            cap.release()
             cap = cv2.VideoCapture(_CAMERA_INDEX)
         if not cap.isOpened():
             _GESTURE_RUNNING = False
@@ -252,7 +255,7 @@ def _gesture_loop() -> None:
 
         history_x = collections.deque(maxlen=8)
 
-        while _GESTURE_RUNNING:
+        while not _STOP_EVENT.is_set():
             ret, frame = cap.read()
             if not ret or frame is None:
                 time.sleep(0.04)
@@ -280,14 +283,14 @@ def _gesture_loop() -> None:
 def start_gesture_engine(camera_index: int = 0) -> str:
     """Activates the background touchless gesture tracking engine."""
     global _GESTURE_RUNNING, _GESTURE_THREAD, _CAMERA_INDEX
-    _CAMERA_INDEX = camera_index
-
-    if _GESTURE_RUNNING and _GESTURE_THREAD and _GESTURE_THREAD.is_alive():
-        return "Project Minority: Spatial gesture control is already running and tracking your hand."
-
-    _GESTURE_RUNNING = True
-    _GESTURE_THREAD = threading.Thread(target=_gesture_loop, name="MinorityGestureEngine", daemon=True)
-    _GESTURE_THREAD.start()
+    with _LIFECYCLE_LOCK:
+        if _GESTURE_THREAD and _GESTURE_THREAD.is_alive():
+            return "Project Minority: Gesture engine is running or still stopping."
+        _CAMERA_INDEX = camera_index
+        _STOP_EVENT.clear()
+        _GESTURE_RUNNING = True
+        _GESTURE_THREAD = threading.Thread(target=_gesture_loop, name="MinorityGestureEngine", daemon=True)
+        _GESTURE_THREAD.start()
 
     return (
         "[MINORITY] SPATIAL GESTURE SENSOR ACTIVE\n"
@@ -307,10 +310,14 @@ def start_gesture_engine(camera_index: int = 0) -> str:
 def stop_gesture_engine() -> str:
     """Stops the touchless gesture tracking engine and releases camera hardware."""
     global _GESTURE_RUNNING
-    if not _GESTURE_RUNNING:
-        return "Project Minority: Gesture engine is currently in standby."
-
-    _GESTURE_RUNNING = False
+    with _LIFECYCLE_LOCK:
+        _STOP_EVENT.set()
+        _GESTURE_RUNNING = False
+        thread = _GESTURE_THREAD
+    if thread and thread is not threading.current_thread():
+        thread.join(timeout=2.0)
+    if thread and thread.is_alive():
+        return "Project Minority: Stop requested; waiting for camera capture to finish."
     return "Project Minority: Spatial gesture tracking halted. Camera hardware released."
 
 
@@ -331,7 +338,12 @@ def get_gesture_status() -> str:
 def gesture_control(parameters: dict, player=None, **kwargs) -> str:
     """Main entrypoint for gesture_control tool."""
     action = (parameters.get("action") or "start").lower().strip()
-    cam_idx = int(parameters.get("camera_index") or 0)
+    try:
+        cam_idx = int(parameters.get("camera_index") or 0)
+        if cam_idx < 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        return "Invalid camera_index: expected a non-negative integer."
 
     if player:
         try:

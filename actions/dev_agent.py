@@ -155,6 +155,15 @@ JSON:"""
             raise RateLimitError(str(e))
         raise
 
+
+def _project_file(project_dir: Path, relative: str) -> Path:
+    """Resolve model-supplied file names without allowing traversal or symlink escape."""
+    root = project_dir.resolve()
+    target = (root / relative).resolve()
+    if target == root or not target.is_relative_to(root):
+        raise ValueError(f"Generated file is outside project directory: {relative}")
+    return target
+
 def _write_file(
     file_info: dict,
     project_description: str,
@@ -227,7 +236,7 @@ Code for {file_path}:"""
         response = model.generate_content(prompt)
         code = _strip_fences(response.text)
 
-        full_path = project_dir / file_path
+        full_path = _project_file(project_dir, file_path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(code, encoding="utf-8")
 
@@ -425,7 +434,7 @@ Fixed code for {fix_path}:"""
             response = model.generate_content(prompt)
             fixed = _strip_fences(response.text)
 
-            full_path = project_dir / fix_path
+            full_path = _project_file(project_dir, fix_path)
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(fixed, encoding="utf-8")
 
@@ -597,13 +606,18 @@ def dev_agent(
     if not description:
         return "Please describe the project you want me to build, sir."
 
-    return _build_project(
+    from core import confirm as confirm_gate
+    return confirm_gate.request(
+        key="dev_agent:build", title="Build and run generated project",
+        detail="This may write files, install packages and execute generated code: " + description,
+        run=lambda: _build_project(
         description  = description,
         language     = language,
         project_name = project_name,
         timeout      = timeout,
         speak        = speak,
         player       = player,
+        ),
     )
 
 

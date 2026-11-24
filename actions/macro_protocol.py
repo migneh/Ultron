@@ -103,7 +103,8 @@ def _launch_app_by_name(name: str):
     except Exception:
         try:
             if _OS == "Windows":
-                subprocess.Popen(f"start {name}", shell=True, **_WIN_HIDE)
+                from actions.open_app import _launch_windows
+                _launch_windows(name)
         except Exception:
             pass
 

@@ -108,7 +108,7 @@ class ActionRegistry:
     # -- called by main.py from _execute_tool --
     def run(self, name: str, parameters: dict, ctx: dict | None = None) -> str:
         rec = self._actions.get(name)
-        if rec is None or not rec.valid:
+        if rec is None or not rec.valid or rec.handler is None:
             return f"Action '{name}' is not available."
         try:
             return _call_handler(rec.handler, parameters, ctx or {}) or "Done."
@@ -128,7 +128,8 @@ def _call_handler(fn: Callable, parameters: dict, ctx: dict) -> str:
     for key in _CTX_KEYS:
         if has_var_kw or key in sig.parameters:
             kwargs[key] = ctx.get(key)
-    return fn(parameters=parameters, **kwargs)
+    result = fn(parameters=parameters, **kwargs)
+    return str(result) if result is not None else ""
 
 
 def _validate(module, filename: str) -> ActionRecord:

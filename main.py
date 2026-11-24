@@ -1,3 +1,4 @@
+import os
 import platform as _platform
 import subprocess as _subprocess
 
@@ -3104,13 +3105,14 @@ class UltronLive:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
 
-        # Start Project Minority gesture engine (auto-start on launch).
+        # Camera access is opt-in: enable gesture_auto_start or start via HUD/tool.
         # Runs best-effort — if OpenCV/camera is unavailable, it silently
         # falls back and gesture control remains available via tool call.
         try:
             from actions.gesture_control import start_gesture_engine
-            _gesture_result = start_gesture_engine(camera_index=0)
-            print(f"[Gesture] {_gesture_result.splitlines()[0] if _gesture_result else 'started'}")
+            if cfg.get_bool("gesture_auto_start", False):
+                _gesture_result = start_gesture_engine(camera_index=0)
+                print(f"[Gesture] {_gesture_result.splitlines()[0] if _gesture_result else 'started'}")
         except Exception as e:
             print(f"[Gesture] Auto-start disabled: {e}")
 

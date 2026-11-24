@@ -756,6 +756,9 @@ class GestureStatusBadge(QLabel):
         self.setFixedHeight(22)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._reset_timer = QTimer(self)
+        self._reset_timer.setSingleShot(True)
+        self._reset_timer.timeout.connect(lambda: self._set_state("engaged"))
         self._set_state("standby")
 
     def mousePressEvent(self, event):
@@ -780,10 +783,11 @@ class GestureStatusBadge(QLabel):
         self.setText(state.upper())
 
     def set_state(self, state: str) -> None:
+        self._reset_timer.stop()
         self._set_state(state)
 
     def flash_detected(self, gesture_name: str) -> None:
         """Briefly show 'detected' state with the gesture name, then return to engaged."""
-        self.setText(f"DETECTED: {gesture_name}")
         self.set_state("detected")
-        QTimer.singleShot(1500, lambda: self.set_state("engaged"))
+        self.setText(f"DETECTED: {gesture_name}")
+        self._reset_timer.start(1500)
