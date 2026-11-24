@@ -1,348 +1,188 @@
-import json
-import subprocess
-import sys
-import time
-from pathlib import Path
+"""Preview and explicitly approve verified Telegram bot sends; never type blind."""
 
-try:
-    import pyautogui
-    pyautogui.FAILSAFE = True
-    pyautogui.PAUSE    = 0.06
-    _PYAUTOGUI = True
-except ImportError:
-    _PYAUTOGUI = False
+from __future__ import annotations
 
-try:
-    import pyperclip
-    _PYPERCLIP = True
-except ImportError:
-    _PYPERCLIP = False
+import unicodedata
 
-def _base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
-
-def _get_os() -> str:
-    try:
-        cfg = json.loads(
-            (_base_dir() / "config" / "api_keys.json").read_text(encoding="utf-8")
-        )
-        return cfg.get("os_system", "windows").lower()
-    except Exception:
-        return "windows"
+from core import confirm
+from core.messaging import (
+    Outbox,
+    TelegramTransport,
+    database_path,
+    recipient_id,
+    send_approved,
+)
 
 
-def _require_pyautogui():
-    if not _PYAUTOGUI:
-        raise RuntimeError("PyAutoGUI not installed. Run: pip install pyautogui")
+def _transport() -> TelegramTransport:
+    return TelegramTransport()
 
 
-def _paste_text(text: str) -> None:
-    _require_pyautogui()
-
-    os_name = _get_os()
-    paste_hotkey = ("command", "v") if os_name == "mac" else ("ctrl", "v")
-
-    if _PYPERCLIP:
-        pyperclip.copy(text)
-        time.sleep(0.15)
-        pyautogui.hotkey(*paste_hotkey)
-        time.sleep(0.1)
-    else:
-        pyautogui.write(text, interval=0.03)
+def _name(value: str) -> str:
+    # Remote display names are not allowed to inject new preview fields or bidi controls.
+    return "".join(
+        char.encode("unicode_escape").decode("ascii")
+        if unicodedata.category(char).startswith("C")
+        else char
+        for char in value
+    )
 
 
-def _clear_and_paste(text: str) -> None:
-    _require_pyautogui()
-    os_name = _get_os()
-    select_all = ("command", "a") if os_name == "mac" else ("ctrl", "a")
-    pyautogui.hotkey(*select_all)
-    time.sleep(0.1)
-    pyautogui.press("delete")
-    time.sleep(0.1)
-    _paste_text(text)
-
-def _open_app(app_name: str) -> bool:
-    _require_pyautogui()
-    os_name = _get_os()
-
-    try:
-        if os_name == "windows":
-            pyautogui.press("win")
-            time.sleep(0.5)
-            _paste_text(app_name)
-            time.sleep(0.6)
-            pyautogui.press("enter")
-            time.sleep(2.5)
-            return True
-
-        elif os_name == "mac":
-            result = subprocess.run(
-                ["open", "-a", app_name],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode != 0:
-                result = subprocess.run(
-                    ["open", "-a", f"{app_name}.app"],
-                    capture_output=True, text=True, timeout=10,
-                )
-            time.sleep(2.5)
-            return result.returncode == 0
-
-        else: 
-            launched = False
-            for launcher in [
-                ["gtk-launch", app_name.lower()],
-                [app_name.lower()],
-            ]:
-                try:
-                    subprocess.Popen(
-                        launcher,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                    launched = True
-                    break
-                except FileNotFoundError:
-                    continue
-            time.sleep(2.5)
-            return launched
-
-    except Exception as e:
-        print(f"[SendMessage] ⚠️ Could not open {app_name}: {e}")
-        return False
-
-
-def _open_browser_url(url: str) -> bool:
-    import webbrowser
-    try:
-        webbrowser.open(url)
-        time.sleep(4.0) 
-        return True
-    except Exception as e:
-        print(f"[SendMessage] ⚠️ Could not open browser: {e}")
-        return False
-
-def _search_in_app(query: str) -> None:
-    _require_pyautogui()
-    os_name = _get_os()
-    search_hotkey = ("command", "f") if os_name == "mac" else ("ctrl", "f")
-
-    pyautogui.hotkey(*search_hotkey)
-    time.sleep(0.5)
-    _clear_and_paste(query)
-    time.sleep(1.0)
-
-def _desktop_send(app_name: str, receiver: str, message: str) -> str:
-    if not _open_app(app_name):
-        return f"Could not open {app_name}."
-
-    time.sleep(1.0)
-    _search_in_app(receiver)
-    pyautogui.press("enter")
-    time.sleep(0.8)
-
-    _paste_text(message)
-    time.sleep(0.2)
-    pyautogui.press("enter")
-    time.sleep(0.3)
-    return f"Message sent to {receiver} via {app_name}."
-
-def _send_whatsapp(receiver: str, message: str) -> str:
-    """WhatsApp goes through the verified driver when there is one.
-
-    _desktop_send below is a sequence of keystrokes with sleeps between them:
-    it presses Win, types the app name, presses Ctrl+F, types the contact,
-    presses Enter twice and reports success — without ever reading back which
-    window received any of that. When the machine is a second slower than the
-    sleeps assume, the whole sequence lands somewhere else and the user is
-    still told the message was sent.
-
-    plugins/_whatsapp_core.py already drives WhatsApp properly for the calling
-    plugins: it finds the real window, opens the conversation, checks the
-    conversation is the right person's, types, and confirms the box emptied
-    before it says "sent". Using it here costs nothing and removes the one
-    failure that matters — a message reported as delivered that never left.
-
-    The blind path stays as the fallback for a machine where the driver cannot
-    run at all (the plugin file removed, a missing dependency, no WhatsApp).
-    But once the driver HAS run, its answer stands: falling back after it
-    refused to send is how a message ends up typed into the wrong
-    conversation, which is worse than not sending it.
-    """
-    try:
-        from plugins import _whatsapp_core as wa
-    except Exception as e:
-        print(f"[SendMessage] WhatsApp driver unavailable ({e}) — typing blind.")
-        return _desktop_send("WhatsApp", receiver, message)
-
-    try:
-        transport, why = wa.get()
-    except Exception as e:
-        print(f"[SendMessage] WhatsApp driver failed to start ({e}) — typing blind.")
-        return _desktop_send("WhatsApp", receiver, message)
-
-    if transport is None:
-        print(f"[SendMessage] {why} — typing blind.")
-        return _desktop_send("WhatsApp", receiver, message)
-
-    sent, failure = transport.send_message_to(receiver, message)
-    if sent:
-        return f"Message sent to {receiver} via WhatsApp."
-    return (f"The message to {receiver} was NOT sent on WhatsApp: {failure}. "
-            f"Tell the user plainly that it was not sent, and why - do not "
-            f"say it was sent.")
-
-def _send_telegram(receiver: str, message: str) -> str:
-    return _desktop_send("Telegram", receiver, message)
-
-def _send_signal(receiver: str, message: str) -> str:
-    return _desktop_send("Signal", receiver, message)
-
-
-def _send_discord(receiver: str, message: str) -> str:
-    return _desktop_send("Discord", receiver, message)
-
-
-def _send_instagram(receiver: str, message: str) -> str:
-    _require_pyautogui()
-
-    if not _open_browser_url("https://www.instagram.com/direct/new/"):
-        return "Could not open Instagram in browser."
-
-    _paste_text(receiver)
-    time.sleep(1.5)
-
-    pyautogui.press("down")
-    time.sleep(0.3)
-    pyautogui.press("enter")   
-    time.sleep(0.4)
-
-    for _ in range(4):
-        pyautogui.press("tab")
-        time.sleep(0.15)
-    pyautogui.press("enter")
-    time.sleep(2.0)
-
-    _paste_text(message)
-    time.sleep(0.2)
-    pyautogui.press("enter")
-    time.sleep(0.3)
-
-    return f"Message sent to {receiver} via Instagram."
-
-
-def _send_messenger(receiver: str, message: str) -> str:
-    _require_pyautogui()
-
-    if not _open_browser_url("https://www.messenger.com/"):
-        return "Could not open Messenger in browser."
-
-
-    _search_in_app(receiver)
-    time.sleep(0.5)
-    pyautogui.press("down")
-    time.sleep(0.3)
-    pyautogui.press("enter")
-    time.sleep(1.0)
-
-    _paste_text(message)
-    time.sleep(0.2)
-    pyautogui.press("enter")
-    time.sleep(0.3)
-
-    return f"Message sent to {receiver} via Messenger."
-
-_PLATFORM_MAP = [
-    ({"whatsapp", "wp", "wapp"},              _send_whatsapp),
-    ({"telegram", "tg"},                      _send_telegram),
-    ({"instagram", "ig", "insta"},            _send_instagram),
-    ({"signal"},                               _send_signal),
-    ({"discord"},                              _send_discord),
-    ({"messenger", "facebook", "fb"},         _send_messenger),
-]
-
-
-def _resolve_platform(platform_str: str):
-    key = platform_str.lower().strip()
-    for keywords, handler in _PLATFORM_MAP:
-        if any(k in key for k in keywords):
-            return handler
-    return lambda r, m: _desktop_send(platform_str.strip().title(), r, m)
-
-
-def send_message(
-    parameters: dict,
-    response=None,
-    player=None,
-    session_memory=None,
-) -> str:
-    params       = parameters or {}
-    receiver     = params.get("receiver", "").strip()
-    message_text = params.get("message_text", "").strip()
-    platform     = params.get("platform", "whatsapp").strip()
-
-    if not receiver:
-        return "Please specify a recipient."
-    if not message_text:
-        return "Please specify the message content."
-    if not _PYAUTOGUI:
-        return "PyAutoGUI is not installed — cannot control the desktop."
-
-    preview = message_text[:50] + ("…" if len(message_text) > 50 else "")
-    print(f"[SendMessage] 📨 {platform} → {receiver}: {preview}")
-    if player:
-        player.write_log(f"[msg] {platform} → {receiver}")
-
-    try:
-        handler = _resolve_platform(platform)
-        result  = handler(receiver, message_text)
-    except Exception as e:
-        result = f"Could not send message: {e}"
-
-    # "NOT sent" contains "sent". The old test read that as a success and put a
-    # tick next to a message that never went.
-    lowered = result.lower()
-    ok = "sent" in lowered and "not sent" not in lowered
-    print(f"[SendMessage] {'✅' if ok else '❌'} {result}")
-    if player:
-        player.write_log(f"[msg] {result}")
-
+def _summary(record: dict) -> str:
+    result = (
+        f"Message ID: {record['id']}\nState: {record['state']}\n"
+        f"Platform: Telegram bot\nFrom bot: {_name(record['sender_name'])} (ID {record['sender_id']})\n"
+        f"To: {_name(record['recipient_name'])} (chat ID {record['recipient_id']}, {record['recipient_type']})"
+    )
+    if record["receipt"]:
+        result += f"\nReceipt: {record['receipt']} — Telegram accepted it; delivered/read status is unknown."
+    if record["error"]:
+        result += f"\nNote: {record['error']}"
+    if record["state"] in {"sending", "outcome_unknown"}:
+        result += "\nDo not retry automatically. Check Telegram manually; a send may already have occurred."
     return result
 
 
-# ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
+def _preview(record: dict) -> str:
+    warning = (
+        "\nWARNING: This targets a group/channel, not a private conversation."
+        if record["recipient_type"] != "private"
+        else ""
+    )
+    return (
+        _summary(record)
+        + warning
+        + f"\n\nExact text ({len(record['body'])} characters):\n{record['body']}"
+        + "\n\nReview the numeric chat ID, sending bot and full text. Only the HUD CONFIRM button authorizes a new send."
+    )
+
+
+def _prepare(parameters: dict, store: Outbox, transport: TelegramTransport) -> dict:
+    if "message_id" in parameters:
+        if set(parameters) - {"action", "message_id"}:
+            raise ValueError(
+                "An existing message_id is immutable. Do not supply recipient/body overrides."
+            )
+        return store.get(parameters["message_id"])
+    platform = parameters.get("platform", "")
+    if not isinstance(platform, str) or platform.strip().casefold() not in {"telegram", "tg"}:
+        raise ValueError(
+            "Verified sending supports Telegram bots only. Blind desktop messaging is disabled; no keystrokes or sends were performed."
+        )
+    receiver = recipient_id(parameters.get("receiver", ""))
+    body = parameters.get("message_text", "")
+    if not isinstance(body, str) or not body.strip() or "\x00" in body:
+        raise ValueError("message_text must be non-empty text without NUL bytes.")
+    try:
+        size = len(body.encode("utf-16-le")) // 2
+    except UnicodeEncodeError:
+        raise ValueError("message_text contains invalid Unicode.") from None
+    if size > 4000:
+        raise ValueError(
+            "message_text must fit within 4000 UTF-16 code units; automatic splitting is not allowed."
+        )
+    return store.prepare(transport.verify(receiver), body)
+
+
+def send_message(parameters: dict, response=None, player=None, session_memory=None) -> str:
+    try:
+        if not isinstance(parameters, dict):
+            raise ValueError("Message parameters must be an object.")
+        action = parameters.get("action", "send")
+        if not isinstance(action, str):
+            raise ValueError("action must be text.")
+        action = action.strip().lower()
+        allowed = {
+            "preview": {"action", "platform", "receiver", "message_text", "message_id"},
+            "send": {"action", "platform", "receiver", "message_text", "message_id"},
+            "status": {"action", "message_id"},
+            "cancel": {"action", "message_id"},
+            "list": {"action", "limit"},
+        }
+        if action not in allowed or set(parameters) - allowed[action]:
+            raise ValueError(
+                "Use preview/send/status/list/cancel and their documented fields. Tool parameters cannot grant approval."
+            )
+        store = Outbox(database_path())
+        if action == "list":
+            rows = store.list(parameters.get("limit", 20))
+            return (
+                "Outbox is empty."
+                if not rows
+                else "Recent outbox entries (bodies omitted):\n\n"
+                + "\n\n".join(map(_summary, rows))
+            )
+        if action == "status":
+            return _summary(store.get(parameters.get("message_id", "")))
+        if action == "cancel":
+            message_id = parameters.get("message_id", "")
+            record = store.cancel(message_id)
+            confirm.cancel_pending(f"message:{message_id}")
+            return _summary(record) + "\nNo new send was performed."
+        transport = _transport()
+        record = _prepare(parameters, store, transport)
+        if action == "preview":
+            return _preview(record) + "\nPreview only; no new send was performed."
+        if not store.wait_for_confirmation(record["id"], confirm.TIMEOUT_SECONDS):
+            return (
+                _summary(store.get(record["id"]))
+                + "\nExisting/terminal attempt reused. No new send or confirmation was created."
+            )
+        record = store.get(record["id"])
+        message_id = record["id"]
+        result = confirm.request(
+            key=f"message:{message_id}",
+            title="Send Telegram message",
+            detail=_preview(record),
+            run=lambda: send_approved(store, message_id, transport),
+            on_cancel=lambda reason: store.stop_waiting(message_id, reason),
+        )
+        return (
+            result
+            + f"\nMessage ID: {message_id}. No new send has been performed by this tool call. Use status after HUD approval."
+        )
+    except ValueError as error:
+        return f"Message request rejected: {error}"
+    except Exception:
+        # Never echo HTTP exception strings containing bot-token URLs or content.
+        return "Message operation failed safely. Check outbox status before retrying; no automatic resend will be attempted."
+
+
 TOOL = {
     "name": "send_message",
     "description": (
-        "Sends a text message via WhatsApp, Telegram, or another messaging "
-        "platform. Write 'message_text' in the USER'S OWN LANGUAGE, exactly "
-        "what they asked to be said. If the result says the message was NOT "
-        "sent, repeat that plainly along with the reason it gives — never "
-        "tell the user a message was sent unless the result said it was."
+        "Preview and request human approval for verified Telegram BOT messages to explicit numeric chat IDs. "
+        "Actions: preview, send (default: requests a HUD confirmation, never approves), status, list, cancel. "
+        "Use receiver/message_text/platform for a new entry or an immutable message_id for an existing entry. "
+        "Preserve the user's exact requested text/language. Requires enabled Telegram bot settings or TELEGRAM_BOT_TOKEN. "
+        "Sends as the displayed bot, not the user's personal account. No blind WhatsApp/Signal/Discord/Instagram/Messenger sending. "
+        "Duplicate payloads are blocked for 24h after a sent receipt; in-flight/unknown attempts block retries indefinitely. "
+        "Only sent with a receipt means Telegram accepted it; delivery/read status is unknown. Never retry unknown outcomes automatically."
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
+            "action": {
+                "type": "STRING",
+                "enum": ["preview", "send", "status", "list", "cancel"],
+                "description": "Default send requests HUD approval only",
+            },
+            "platform": {"type": "STRING", "description": "telegram or tg; new entries only"},
             "receiver": {
                 "type": "STRING",
-                "description": "Recipient contact name"
+                "description": "Explicit numeric Telegram chat ID; no fuzzy contact names",
             },
             "message_text": {
                 "type": "STRING",
-                "description": "The message to send"
+                "description": "Exact text, max 4000 UTF-16 units; plain text only",
             },
-            "platform": {
+            "message_id": {
                 "type": "STRING",
-                "description": "Platform: WhatsApp, Telegram, etc."
-            }
+                "description": "Full ID from preview/send/list; cannot be combined with body/recipient overrides",
+            },
+            "limit": {"type": "INTEGER", "description": "List at most 1–50 entries, default 20"},
         },
-        "required": [
-            "receiver",
-            "message_text",
-            "platform"
-        ]
+        "required": [],
     },
     "handler": send_message,
 }

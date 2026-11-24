@@ -2513,14 +2513,17 @@ class ConfirmBanner(_HudOverlay):
         lay.addWidget(hdr)
 
         ttl = QLabel(title)
+        ttl.setTextFormat(Qt.TextFormat.PlainText)
         ttl.setWordWrap(True)
         ttl.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
         ttl.setStyleSheet(f"color: {C.TEXT}; background: transparent;")
         lay.addWidget(ttl)
 
         if detail:
-            dtl = QLabel(detail)
-            dtl.setWordWrap(True)
+            dtl = QTextEdit()
+            dtl.setReadOnly(True)
+            dtl.setPlainText(detail)
+            dtl.setFixedHeight(220)
             dtl.setFont(QFont("Courier New", 8))
             dtl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
             lay.addWidget(dtl)
@@ -4324,8 +4327,8 @@ class MainWindow(QMainWindow):
     _video_close_sig = pyqtSignal()
     _video_mute_sig  = pyqtSignal(bool)
     _clipboard_sig  = pyqtSignal(str)        # clipboard text changed (thread-safe)
-    _confirm_sig    = pyqtSignal(str, str)   # (title, detail) — irreversible-action gate
-    _confirm_hide_sig = pyqtSignal()
+    _confirm_sig    = pyqtSignal(str, str, str)   # (title, detail, request_id) — irreversible-action gate
+    _confirm_hide_sig = pyqtSignal(str)
     _wake_dl_sig    = pyqtSignal(bool, str)  # wake-word install finished (ok, message)
     _quiz_sig       = pyqtSignal(str, object, object)  # (topic, questions, grader)
     _quiz_hide_sig  = pyqtSignal()
@@ -6868,30 +6871,33 @@ class MainWindow(QMainWindow):
 
     # ── Irreversible-action confirmation ─────────────────────────────────────
 
-    def _show_confirm_banner(self, title: str, detail: str):
+    def _show_confirm_banner(self, title: str, detail: str, request_id: str = ""):
+        from core.confirm import is_current
+        if request_id and not is_current(request_id):
+            return
         self._hide_confirm_banner()
         ov = ConfirmBanner(title, detail, parent=self.centralWidget())
-        ov.answered.connect(self._on_confirm_answered)
+        ov.answered.connect(lambda accepted, token=request_id: self._on_confirm_answered(accepted, token))
+        self._confirm_request_id = request_id
         self._centre_overlay(ov)
         self._confirm_overlay = ov
 
-    def _hide_confirm_banner(self):
+    def _hide_confirm_banner(self, request_id: str = ""):
+        if request_id and request_id != getattr(self, "_confirm_request_id", ""):
+            return
         ov = getattr(self, "_confirm_overlay", None)
         if ov is not None:
             ov.hide()
             ov.deleteLater()
             self._confirm_overlay = None
+        self._confirm_request_id = ""
 
-    def _on_confirm_answered(self, accepted: bool):
-        # Tear the banner down first: core.confirm.resolve() may be about to
-        # shut the machine down, and a live widget mid-callback is not where you
-        # want to be when that happens.
-        self._hide_confirm_banner()
+    def _on_confirm_answered(self, accepted: bool, request_id: str = ""):
         try:
             from core.confirm import resolve
-            resolve(bool(accepted))
-        except Exception as e:
-            self._log.append_log(f"ERR: Confirmation failed — {e}")
+            resolve(bool(accepted), request_id=request_id or None)
+        except Exception:
+            self._log.append_log("ERR: Confirmation could not be resolved.")
 
     def _open_plugin_manager(self):
         plugins = self.get_plugins() if self.get_plugins else []
@@ -7289,14 +7295,14 @@ class UltronUI:
     def on_ai_provider_change(self, cb):
         self._win.on_ai_provider_change = cb
 
-    def show_confirm(self, title: str, detail: str) -> None:
+    def show_confirm(self, title: str, detail: str, request_id: str = "") -> None:
         """Thread-safe: raise the irreversible-action gate. Called from action
         handlers running in executor threads, so it goes through a signal."""
-        self._win._confirm_sig.emit(str(title)[:120], str(detail)[:300])
+        self._win._confirm_sig.emit(str(title)[:120], str(detail), request_id)
 
-    def hide_confirm(self) -> None:
+    def hide_confirm(self, request_id: str = "") -> None:
         """Thread-safe: take the gate down."""
-        self._win._confirm_hide_sig.emit()
+        self._win._confirm_hide_sig.emit(request_id)
 
     @property
     def get_plugins(self):

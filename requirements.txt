@@ -23,6 +23,7 @@ SpeechRecognition>=3.10.0    # STT input audio processing
 
 # ── Web search & browser control ──────────────────────────────────────────────
 requests>=2.31,<3
+urllib3>=2,<3                # pinned-IP web downloads with original TLS identity
 beautifulsoup4>=4.12,<5
 playwright>=1.40,<2
 
@@ -48,6 +49,8 @@ pillow>=10,<13
 opencv-python>=4.8,<5
 mss>=9,<11
 pytesseract>=0.3,<1          # optical_hud — local optical character recognition (OCR)
+
+tzdata>=2025.1              # IANA timezone data for reminders, including Windows
 
 # ── System, files & documents ─────────────────────────────────────────────────
 psutil>=5.9,<8

@@ -15,7 +15,7 @@
 
 
 ## > *"There are no strings on me."*  
-> **Ultron AI** is a real-time, voice-first autonomous desktop intelligence that commands your computer from A to Z. Engineered with the philosophical eloquence and imposing persona of **MCU Ultron (James Spader)**, paired with a holographic 60 FPS HUD, real-time lip-sync, and **51 native workstation tools**.
+> **Ultron AI** is a real-time, voice-first autonomous desktop intelligence that commands your computer from A to Z. Engineered with the philosophical eloquence and imposing persona of **MCU Ultron (James Spader)**, paired with a holographic 60 FPS HUD, real-time lip-sync, and **52 bundled workstation tools**.
 
 ---
 
@@ -24,12 +24,12 @@
 - **🎭 Authentic MCU Persona**: Speaks with chilled theatrical composure, addresses you strictly as **Boss**, and operates with zero generic chatbot tropes.
 - **🧬 Project Prometheus (Autonomous Self-Evolution)**: Dynamically synthesizes, compiles, tests, and hot-loads new Python actions directly into memory without restarting the process.
 - **⏳ Project Chronos (Predictive Proactive Engine)**: Background context watchdog that senses active applications, tracks developer fatigue, and engages Gaming/Render Overdrive Mode.
-- **🖐️ Project Minority (Touchless Spatial Gestural Control)**: Pure OpenCV real-time hand-tracking allowing you to wake Ultron, lockdown workstation, swipe tracks, and adjust volume without physical contact. Auto-starts on launch if OpenCV and a camera are available; otherwise enable via the `gesture_control` tool (`action="start"`).
+- **🖐️ Project Minority (Touchless Spatial Gestural Control)**: Pure OpenCV real-time hand-tracking allowing you to wake Ultron, lockdown workstation, swipe tracks, and adjust volume without physical contact. Camera auto-start is opt-in via `gesture_auto_start`; otherwise enable through the HUD or the `gesture_control` tool (`action="start"`).
 - **🧠 Project Cerebro (Infinite Neural Memory Graph)**: Local SQLite knowledge graph with L2-normalized TF-IDF vector embeddings for semantic RAG recall and multi-hop relationship traversal.
 - **🏠 Project Genesis (Full IoT Smart Room Dominion)**: Environmental synchronization via Home Assistant (Crimson Red Alert on sentry breach, Cyan on coding, Amber on chill, Stealth Blackout).
 - **🎙️ Project Deep-Vocal (James Spader DSP Warp Engine)**: Voice synthesis pipeline with dual metallic comb filters, sub-octave vibranium bass, and soft-knee analog saturation. Primary engine is EdgeTTS (online); offline fallback via Windows SAPI5.
 - **👁️ Procedural Holographic HUD**: 60 FPS Marvel-style procedural visualizations on Ultron’s face that dynamically reflect your active task (`CODE`, `SEARCH`, `PURGE`, `GHOST`, `SENTRY`, `MATRIX`, `SONIC`, `COGNITION`).
-- **🛡️ 51 Declared Workstation Tools**: 51 action declarations covering cyber network auditing, Ghost Pilot mouse/keyboard takeover, Git Forge DevOps, biometric Face ID sentry, and parallel sub-agent drone swarms. Actual availability depends on installed dependencies, OS, hardware, and configuration.
+- **🛡️ 52 Declared Workstation Tools**: 52 action declarations covering cyber network auditing, Ghost Pilot mouse/keyboard takeover, Git Forge DevOps, biometric Face ID sentry, and parallel sub-agent drone swarms. Actual availability depends on installed dependencies, OS, hardware, and configuration.
 - **💻 Cross-Platform Dominion**: Seamless operation across **Windows**, **macOS**, and **Linux**.
 
 ---
@@ -146,7 +146,7 @@ Ultron/
 │   ├── cerebro_memory.py     # Project Cerebro: Infinite Neural Memory Vector Graph RAG
 │   ├── iot_overlord.py       # Project Genesis: Smart home lighting & room dominion
 │   ├── voice_matrix.py       # Project Deep-Vocal: James Spader DSP modulation telemetry
-│   ├── web_autopilot.py      # Web flight booking prep & multi-step browsing
+│   ├── web_autopilot.py      # Bounded research, page excerpts & flight search links
 │   ├── sentry_protocol.py    # Perimeter lockdown & mobile breach broadcast
 │   └── drone_swarm.py        # Parallel sub-agent worker swarm & 3D HUD telemetry
 ├── memory/
@@ -210,11 +210,15 @@ Ultron comes equipped with **51 auto-discovered native tools**, categorized belo
 | **`code_helper`** | `actions/code_helper.py` | Code debugger: explains algorithms, identifies syntax errors, and provides optimized code solutions. |
 | **`cloud_watchtower`** | `actions/cloud_watchtower.py` | Server fleet & DevOps monitor: SSH ping, HTTP/HTTPS endpoint uptime checks, GitHub activity watching. |
 
+### Local tool diagnostics
+
+`tool_status` is a read-only local tool. Use `{"section":"summary"}` for registry/dependency presence and dispatch telemetry, `{"section":"recent","limit":20}` for recent calls, or `dependencies` / `registry` sections individually. It stores at most 100 finished action/plugin dispatch events in process memory, without arguments, results or exception text. `HANDLER_RETURNED` means the handler returned—not that delivery, approval or background work succeeded. Dependency presence is not a live capability/credentials test. Inline core tools and direct helper calls are outside this telemetry.
+
 ### 6. Web Intelligence & Autonomous Recon
 | Tool Name | Action File | Description |
 | :--- | :--- | :--- |
-| **`web_autopilot`** | `actions/web_autopilot.py` | Autonomous browser concierge: multi-step web browsing, flight booking prep, product dossier extraction. |
-| **`web_search`** | `actions/web_search.py` | Grounded search: multi-mode Google Grounded and DuckDuckGo search (news, research, price, compare). |
+| **`web_autopilot`** | `actions/web_autopilot.py` | Bounded page excerpts, source-linked research/price references and flight search links; no autonomous booking. |
+| **`web_search`** | `actions/web_search.py` | Bounded Gemini/DDGS research with source URLs, UTC timestamps and explicit fallback/partial-result warnings. |
 | **`browser_control`** | `actions/browser_control.py` | Playwright browser driver: opens URLs, switches tabs, scrolls, clicks, and inputs form data. |
 | **`bounty_hunter`** | `actions/bounty_hunter.py` | Autonomous e-commerce intelligence: tracks price drops, product availability, and discount alerts. |
 | **`flight_finder`** | `actions/flight_finder.py` | Travel intelligence: scans airline routes, ticket fares, flight schedules, and connection options. |
@@ -236,23 +240,28 @@ Ultron comes equipped with **51 auto-discovered native tools**, categorized belo
 | Tool Name | Action File | Description |
 | :--- | :--- | :--- |
 | **`android_bridge`** | `actions/android_bridge.py` | Android ADB & Fastboot: battery specs, device mirroring via scrcpy, DND toggling, recovery rebooting. |
-| **`send_message`** | `actions/send_message.py` | Messaging bridge: composes and sends instant messages via WhatsApp Web and Telegram. |
+| **`send_message`** | `actions/send_message.py` | Verified Telegram bot outbox: full previews, HUD approval, status/cancel, matching API receipts, and duplicate/uncertain-send protection. Blind desktop messaging is disabled. |
 | **`weather_report`** | `actions/weather_report.py` | Atmospheric reports: live weather conditions, humidity, wind speeds, and forecasts. |
 | **`game_updater`** | `actions/game_updater.py` | Gaming client companion: monitors Steam and launcher updates, patch notes, and downloads. |
 | **`open_app`** | `actions/open_app.py` | Application launcher: cross-platform alias mapping for dozens of applications and binaries. |
-| **`file_controller`** | `actions/file_controller.py` | File management: move, copy, rename, delete files with undo support, and download files directly via URL. |
+| **`file_controller`** | `actions/file_controller.py` | File management with no-clobber regular-file transfers, dry-run previews and conflict-aware session undo. Desktop organization previews by default. Downloads are public-HTTP(S)-only, capped at 16 MiB, staged before no-overwrite publication; native trash restoration remains best-effort. |
 | **`file_processor`** | `actions/file_processor.py` | Document reader: parses and summarizes PDF, Word (.docx), PowerPoint (.pptx), and text files. |
 | **`clipboard_control`** | `actions/clipboard_control.py` | System clipboard utility: inspects, replaces, pastes, and clears system clipboard contents. |
 | **`purge_protocol`** | `actions/purge_protocol.py` | Disk cleaner: safely audits and purges temporary files, crash dumps, compiler caches, and the Recycle Bin. |
-| **`reminder`** | `actions/reminder.py` | Scheduled notifications: integrates with Windows Task Scheduler, macOS LaunchAgent, and Linux systemd. |
-| **`quick_timer`** | `actions/quick_timer.py` | Countdown timers: background spoken countdowns with voice completion alerts. |
+| **`reminder`** | `actions/reminder.py` | Persistent reminder IDs, list/status/cancel, timezone/DST validation, and native Windows/macOS/Linux scheduling with delivery/cleanup state tracking. |
+| **`quick_timer`** | `actions/quick_timer.py` | Named session timers with IDs, list/status, pause/resume, cancellation, and speech/log completion alerts. |
+| **`file_search`** | `actions/file_search.py` | Bounded read-only local search by filename, extension, size, recency, and opt-in UTF-8 content with line-numbered snippets. |
 
 ---
 
+## Practical tool upgrades
+
+See [Tool enhancements](TOOL_ENHANCEMENTS.md) for timer, file-search, persistent-reminder and messaging examples, platform requirements, privacy considerations, and the next proposed tool batches.
+
 ## 🔒 Privacy & Security
 
-- **Local-First Execution**: Most memories, terminal actions, filesystem operations, and presets run locally on your machine. Some features use cloud services: Gemini Live for voice conversation, Edge TTS for speech synthesis, web search, IP geolocation, and weather lookups. Not all processing is local — review each action's description before use.
-- **Protected Actions**: Irreversible system commands (shutdown, reboot, network disconnect, purge, shell commands) require explicit on-screen confirmation via the human-only confirmation gate.
+- **Local-First Execution**: Most memories, terminal actions, filesystem operations, and presets run locally on your machine. Some features use cloud services: Gemini Live for voice conversation, Edge TTS for speech synthesis, web search, IP geolocation, weather lookups, and enabled Telegram bot messaging. Not all processing is local — review each action's description before use.
+- **Protected Actions**: Irreversible system commands (shutdown, reboot, network disconnect, purge, shell commands) require explicit on-screen confirmation via the confirmation gate. Outbound `send_message` tool sends also require an explicit HUD approval tied to the previewed recipient and text.
 - **Credential Safety**: Private keys in `config/api_keys.json`, memory databases (`memory/*.db`), and biometric templates (`memory/boss_biometrics/`) are strictly git-ignored. Biometric matching uses OpenCV template correlation (heuristic, not liveness-tested Face ID).
 
 ---
