@@ -16,8 +16,11 @@ from pathlib import Path
 import py_compile
 import re
 import sys
+import threading
 import traceback
 from typing import Any, Callable, Optional
+
+from core import confirm as confirm_gate
 
 _BASE_DIR = Path(__file__).resolve().parent.parent
 _ACTIONS_DIR = _BASE_DIR / "actions"
@@ -26,6 +29,31 @@ _PLUGINS_DIR = _BASE_DIR / "plugins"
 # Live registries hooked up at runtime
 _LIVE_ACTION_REGISTRY: Any = None
 _LIVE_PLUGIN_REGISTRY: Any = None
+
+# ── Prometheus audit trail ───────────────────────────────────────────────
+# Every synthesis, rejection and activation is appended to a log so there is a
+# durable record of what code Ultron was asked to write and whether it ran.
+_PROM_AUDIT_DIR = _BASE_DIR / "logs"
+_PROM_AUDIT_FILE = _PROM_AUDIT_DIR / "prometheus_audit.log"
+_PROM_AUDIT_LOCK = threading.Lock()
+
+
+def _prometheus_audit_log(tool_name: str, category: str, disposition: str, detail: str) -> None:
+    """Append one JSON line to the Prometheus audit trail. Never raises."""
+    try:
+        _PROM_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+        record = {
+            "when": datetime.now(timezone.utc).isoformat(),
+            "tool": tool_name,
+            "category": category,
+            "disposition": disposition,  # written | compiled | rejected | activated | activation_failed
+            "detail": detail[:500],
+        }
+        with _PROM_AUDIT_LOCK:
+            with open(_PROM_AUDIT_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  # auditing must never block synthesis
 
 
 def set_live_registries(action_reg: Any, plugin_reg: Any) -> None:
@@ -45,16 +73,44 @@ def _clean_identifier(name: str) -> str:
 
 
 def _validate_safety(code: str) -> tuple[bool, str]:
-    """Safety filter guarding against accidental catastrophic operations."""
+    """Safety filter guarding against accidental catastrophic operations.
+
+    Phase 0: a broader call-site blacklist plus the confirmation gate in
+    synthesize_action. This is defence-in-depth, not a sandbox -- LLM-synthesized
+    code is never executed in-process without explicit user consent.
+    """
     dangerous_patterns = [
+        # Drive / OS destruction
         r"format\s+[c-zC-Z]:",
         r"rmdir\s+/[sS]\s+/[qQ]\s+[c-zC-Z]:\\Windows",
+        # Classic one-liners
         r"os\.system\(\s*['\"]rm\s+-rf\s+/\s*['\"]\)",
-        r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;",  # fork bomb
+        r":\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;",  # fork bomb
+        # Arbitrary process / shell execution
+        r"subprocess\.(Popen|run|call|check_output|check_call)\(",
+        r"os\.(system|execv|execve|execvp|spawnl|spawnle|spawnlp|spawnlpe|spawnv|spawnve|spawnvp|spawnvpe)\(",
+        # Dynamic code evaluation
+        r"\beval\(",
+        r"\bexec\(",
+        r"\bcompile\(",
+        r"__import__\(",
+        r"importlib\.",
+        # Networking (no phone-home, no exfiltration, no C2)
+        r"socket\.",
+        r"urllib\.(request|parse)",
+        r"requests\.",
+        r"ctypes\.",
+        r"paramiko\.",
+        r"ftplib\.",
+        r"http\.client\.",
+        # Writes to the real filesystem (allow the helper's player.write_log)
+        r"open([^)]*[/~])",
+        r"\.write_text\(",
+        r"\.write_bytes\(",
     ]
     for pat in dangerous_patterns:
         if re.search(pat, code, re.IGNORECASE):
-            return False, f"Rejected: code contains prohibited destructive signature matching '{pat}'."
+            return False, f"Rejected: code contains prohibited signature matching '{pat}'."
     return True, "Code passed security heuristics."
 
 
@@ -139,6 +195,7 @@ def synthesize_action(
     # 2. Heuristic Safety Check
     safe, msg = _validate_safety(code)
     if not safe:
+        _prometheus_audit_log(safe_name, category, "rejected", msg)
         return f"Prometheus Security Gate: {msg}"
 
     # 3. Determine destination directory
@@ -159,41 +216,61 @@ def synthesize_action(
     except Exception as e:
         return f"Prometheus Compilation Error: Bytecode compilation failed: {e}"
 
-    # 6. Dynamic Import and Hot-Registration
-    load_status = "Saved to disk."
-    try:
-        module_name = f"plugins.{safe_name}" if is_plugin else f"actions.{safe_name}"
-        spec = importlib.util.spec_from_file_location(module_name, target_file)
-        if spec and spec.loader:
+    _prometheus_audit_log(safe_name, category, "compiled", f"written to {target_file}")
+
+    # 6. Dynamic Import and Hot-Registration (gated behind user confirmation)
+    # Executing LLM-synthesized code in this process is privileged, so activation
+    # only runs after the user presses CONFIRM on the HUD. The file is already on
+    # disk and byte-compiled; without consent it is discovered on next restart.
+    def _activate() -> str:
+        """Runs only after the user presses CONFIRM on the HUD."""
+        try:
+            spec = importlib.util.spec_from_file_location(module_name, target_file)
+            if not spec or not spec.loader:
+                _prometheus_audit_log(safe_name, category, "activation_failed", "no import spec")
+                return "Activation skipped: could not build import spec."
             mod = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = mod
             spec.loader.exec_module(mod)
 
-            # Hot-register with running ActionRegistry
+            parts = []
             if not is_plugin and _LIVE_ACTION_REGISTRY is not None:
                 from core.action_loader import _validate
                 rec = _validate(mod, target_file.name)
                 if rec.valid and hasattr(_LIVE_ACTION_REGISTRY, "register_action"):
                     _LIVE_ACTION_REGISTRY.register_action(rec)
-                    load_status = "Compiled & Hot-Loaded into Active Neural Registry (Instant Use)."
+                    parts.append("hot-loaded into Action Registry")
                 elif rec.valid and hasattr(_LIVE_ACTION_REGISTRY, "_actions"):
                     _LIVE_ACTION_REGISTRY._actions[rec.name] = rec
-                    load_status = "Compiled & Injected into Live Action Table (Zero Restart Required)."
-
-            # Hot-register with running PluginRegistry
+                    parts.append("injected into live Action table")
+                else:
+                    parts.append(f"validation declined: {rec.error}")
             elif is_plugin and _LIVE_PLUGIN_REGISTRY is not None:
                 from core.plugin_loader import _validate
                 rec = _validate(mod, target_file.name)
                 if rec.valid and hasattr(_LIVE_PLUGIN_REGISTRY, "register_plugin"):
                     _LIVE_PLUGIN_REGISTRY.register_plugin(rec)
-                    load_status = "Compiled & Hot-Loaded into Plugin Hive."
+                    parts.append("hot-loaded into Plugin Registry")
                 elif rec.valid and hasattr(_LIVE_PLUGIN_REGISTRY, "_plugins"):
                     _LIVE_PLUGIN_REGISTRY._plugins[rec.name] = rec
-                    load_status = "Compiled & Injected into Live Plugin Table."
+                    parts.append("injected into live Plugin table")
+                else:
+                    parts.append(f"validation declined: {rec.error}")
             else:
-                load_status = "Compiled and ready. Available immediately across session instances."
-    except Exception as e:
-        load_status = f"Compiled to disk, but dynamic memory binding encountered warning: {e}"
+                parts.append("available after restart")
+
+            _prometheus_audit_log(safe_name, category, "activated", "; ".join(parts))
+            return "Activated: " + "; ".join(parts)
+        except Exception as e:
+            _prometheus_audit_log(safe_name, category, "activation_failed", str(e))
+            return f"Activation warning: {e}"
+
+    return confirm_gate.request(
+        key=f"prometheus:{safe_name}",
+        title=f"Activate synthesized tool '{safe_name}'",
+        detail=f"{description[:400]}\nTarget: {target_file}",
+        run=_activate,
+    )
 
     if player:
         try:

@@ -371,7 +371,7 @@ def save_voice_warp_intensity(intensity: float) -> None:
 
 
 def get_wake_word_enabled() -> bool:
-    """Whether local wake-word gating is on (assistant sleeps until 'Hey Jarvis')."""
+    """Whether local wake-word gating is on (assistant sleeps until 'Hey Ultron')."""
     return load_api_keys().get("wake_word_enabled", False)
 
 

@@ -24,12 +24,12 @@
 - **🎭 Authentic MCU Persona**: Speaks with chilled theatrical composure, addresses you strictly as **Boss**, and operates with zero generic chatbot tropes.
 - **🧬 Project Prometheus (Autonomous Self-Evolution)**: Dynamically synthesizes, compiles, tests, and hot-loads new Python actions directly into memory without restarting the process.
 - **⏳ Project Chronos (Predictive Proactive Engine)**: Background context watchdog that senses active applications, tracks developer fatigue, and engages Gaming/Render Overdrive Mode.
-- **🖐️ Project Minority (Touchless Spatial Gestural Control)**: Pure OpenCV real-time hand-tracking allowing you to wake Ultron, lockdown workstation, swipe tracks, and adjust volume without physical contact.
+- **🖐️ Project Minority (Touchless Spatial Gestural Control)**: Pure OpenCV real-time hand-tracking allowing you to wake Ultron, lockdown workstation, swipe tracks, and adjust volume without physical contact. Auto-starts on launch if OpenCV and a camera are available; otherwise enable via the `gesture_control` tool (`action="start"`).
 - **🧠 Project Cerebro (Infinite Neural Memory Graph)**: Local SQLite knowledge graph with L2-normalized TF-IDF vector embeddings for semantic RAG recall and multi-hop relationship traversal.
 - **🏠 Project Genesis (Full IoT Smart Room Dominion)**: Environmental synchronization via Home Assistant (Crimson Red Alert on sentry breach, Cyan on coding, Amber on chill, Stealth Blackout).
-- **🎙️ Project Deep-Vocal (James Spader DSP Warp Engine)**: Offline neural voice synthesis pipeline with dual metallic comb filters, sub-octave vibranium bass, and soft-knee analog saturation.
+- **🎙️ Project Deep-Vocal (James Spader DSP Warp Engine)**: Voice synthesis pipeline with dual metallic comb filters, sub-octave vibranium bass, and soft-knee analog saturation. Primary engine is EdgeTTS (online); offline fallback via Windows SAPI5.
 - **👁️ Procedural Holographic HUD**: 60 FPS Marvel-style procedural visualizations on Ultron’s face that dynamically reflect your active task (`CODE`, `SEARCH`, `PURGE`, `GHOST`, `SENTRY`, `MATRIX`, `SONIC`, `COGNITION`).
-- **🛡️ 51 Native Workstation Tools**: Complete workstation control including cyber network auditing, Ghost Pilot mouse/keyboard takeover, Git Forge DevOps, biometric Face ID sentry, and parallel sub-agent drone swarms.
+- **🛡️ 51 Declared Workstation Tools**: 51 action declarations covering cyber network auditing, Ghost Pilot mouse/keyboard takeover, Git Forge DevOps, biometric Face ID sentry, and parallel sub-agent drone swarms. Actual availability depends on installed dependencies, OS, hardware, and configuration.
 - **💻 Cross-Platform Dominion**: Seamless operation across **Windows**, **macOS**, and **Linux**.
 
 ---
@@ -48,8 +48,8 @@ Create or edit `config/api_keys.json` with your free [Google Gemini API Key](htt
 ```json
 {
   "gemini_api_key": "YOUR_GEMINI_API_KEY",
-  "provider": "gemini",
-  "model": "models/gemini-2.0-flash-exp",
+  "ai_provider": "gemini",
+  "ai_model": "models/gemini-2.0-flash-exp",
   "ultron_voice_warp": true,
   "voice_warp_intensity": 0.55
 }
@@ -87,7 +87,7 @@ python main.py
 ### 4. Project Cerebro (Infinite Neural Memory Vector Graph / Local RAG)
 * **Files**: `memory/cerebro_graph.py` & `actions/cerebro_memory.py`
 * **Trigger Phrases**: *"Ultron, recall my flight details"*, *"Remember that I prefer dark mode"*, *"Show connections for Project Ultron"*
-* Maintains an encrypted SQLite knowledge graph pairing concept nodes and weighted directed edges with L2-normalized cosine vector embeddings. Supports semantic fuzzy search even when exact words differ (e.g. querying *"plane tickets"* finds *"IndiGo 6E-204 to Mumbai"*).
+* Maintains an encrypted SQLite knowledge graph pairing concept nodes and weighted directed edges with L2-normalized cosine vector embeddings. Supports semantic fuzzy search even when exact words differ (e.g. querying *"plane tickets"* finds *\"IndiGo 6E-204 to Mumbai\"). Stored in plain SQLite at \`memory/cerebro_graph.db\` — not encrypted.
 
 ### 5. Project Genesis (Full IoT Smart Room Dominion)
 * **File**: `actions/iot_overlord.py`
@@ -99,7 +99,7 @@ python main.py
   * `stealth`: Complete room luminaire blackout.
   * `daylight`: 6500K crisp daylight for daytime overdrive.
 
-### 6. Project Deep-Vocal (Offline Neural Voice & James Spader DSP Warp Engine)
+### 6. Project Deep-Vocal (James Spader DSP Warp Engine — EdgeTTS primary, SAPI5 offline fallback)
 * **Files**: `core/tts.py` & `actions/voice_matrix.py`
 * **Trigger Phrases**: *"Ultron, test voice chassis"*, *"Set voice warp intensity to 70%"*
 * Authentic Marvel Cinematic Universe robotic vocal modulation:
@@ -151,9 +151,8 @@ Ultron/
 │   └── drone_swarm.py        # Parallel sub-agent worker swarm & 3D HUD telemetry
 ├── memory/
 │   ├── cerebro_graph.py      # SQLite Knowledge Graph & L2 Cosine Vector Engine
-│   ├── cerebro_graph.db      # Neural graph database with entities, edges & embeddings
 │   ├── workspace_presets.json# Presets for coding, gaming, study, chill, & cyber modes
-│   └── workspace_recall.db   # FTS5 neural memory database (local & encrypted)
+│   └── (cerebro_graph.db, workspace_recall.db — runtime only, git-ignored)
 └── config/
     ├── api_keys.json.example # Safe configuration template
     └── api_keys.json         # API keys and provider preferences (git-ignored)
@@ -173,12 +172,12 @@ Ultron comes equipped with **51 auto-discovered native tools**, categorized belo
 | **`gesture_control`** | `actions/gesture_control.py` | **Project Minority**: Touchless OpenCV webcam hand-tracking (Open Palm, Fist Clench, Swipe, Volume Up/Down). |
 | **`cerebro_memory`** | `actions/cerebro_memory.py` | **Project Cerebro**: Infinite Neural Memory Vector Graph & Local RAG with L2-normalized cosine similarity. |
 | **`iot_overlord`** | `actions/iot_overlord.py` | **Project Genesis**: Full room lighting dominion (Crimson Red Alert, Matrix Cyan, Warm Amber, Stealth Blackout). |
-| **`voice_matrix`** | `actions/voice_matrix.py` | **Project Deep-Vocal**: James Spader MCU Ultron robotic DSP warp engine, vocoder tuning, and offline vocal synthesis. |
+| **`voice_matrix`** | `actions/voice_matrix.py` | **Project Deep-Vocal**: James Spader MCU Ultron robotic DSP warp engine, vocoder tuning, and voice synthesis (EdgeTTS primary, SAPI5 offline fallback). |
 
 ### 2. Workspace Matrix & Multi-Monitor Command
 | Tool Name | Action File | Description |
 | :--- | :--- | :--- |
-| **`workspace_matrix`** | `actions/workspace_matrix.py` | Mood-aware orchestrator: sets up IDE, terminal, browser portals, volume, brightness, and IoT lights. |
+| **`workspace_matrix`** | `actions/workspace_matrix.py` | Mood-aware orchestrator with 7 tool modes (coding, gaming, research, cyber_audit, chill, creator, workspace_matrix): sets up IDE, terminal, browser portals, volume, brightness, and IoT lights. |
 | **`war_room`** | `actions/war_room.py` | Multi-monitor matrix: maps physical displays, positions windows across screens, cyber telemetry stream. |
 | **`desktop_control`** | `actions/desktop.py` | Desktop and taskbar operations: organize desktop files, window placement, minimization, and cleanup. |
 | **`macro_protocol`** | `actions/macro_protocol.py` | Vibranium protocol engine: executes complex multi-step automated chained routines. |
@@ -252,9 +251,9 @@ Ultron comes equipped with **51 auto-discovered native tools**, categorized belo
 
 ## 🔒 Privacy & Security
 
-- **100% Local Execution**: All memories, terminal actions, filesystem operations, and presets remain strictly on your local machine.
-- **Protected Actions**: Irreversible system commands (shutdown, reboot, network disconnect) require explicit on-screen confirmation.
-- **Credential Safety**: Private keys in `config/api_keys.json` and biometric embeddings are strictly git-ignored.
+- **Local-First Execution**: Most memories, terminal actions, filesystem operations, and presets run locally on your machine. Some features use cloud services: Gemini Live for voice conversation, Edge TTS for speech synthesis, web search, IP geolocation, and weather lookups. Not all processing is local — review each action's description before use.
+- **Protected Actions**: Irreversible system commands (shutdown, reboot, network disconnect, purge, shell commands) require explicit on-screen confirmation via the human-only confirmation gate.
+- **Credential Safety**: Private keys in `config/api_keys.json`, memory databases (`memory/*.db`), and biometric templates (`memory/boss_biometrics/`) are strictly git-ignored. Biometric matching uses OpenCV template correlation (heuristic, not liveness-tested Face ID).
 
 ---
 
