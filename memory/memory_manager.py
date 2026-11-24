@@ -44,6 +44,21 @@ PROMPT_INDEX_CHARS = 420
 # with forty stored preferences still gets their sister into the prompt.
 PROMPT_MAX_PER_CATEGORY = 6
 
+# ── Confidence scoring for automatic memory extraction ────────────────────────
+# High   — explicit, unambiguous statement ("my name is X", "I live in Y")
+# Medium — clear intent but slightly ambiguous value ("I work at a tech company")
+# Low    — pattern matched but value extraction uncertain ("I'm building something")
+CONF_HIGH   = "high"
+CONF_MEDIUM = "medium"
+CONF_LOW    = "low"
+
+# A "_pending" section holds low-confidence extractions awaiting user review.
+# These are never sent in the system prompt until confirmed.
+_PENDING_SECTION = "_pending"
+
+# Confidence threshold: items below this go to pending review instead of auto-save.
+_CONFIDENCE_REVIEW_THRESHOLD = CONF_LOW
+
 def _empty_memory() -> dict:
     return {
         "identity":      {},
@@ -52,6 +67,7 @@ def _empty_memory() -> dict:
         "relationships": {},
         "wishes":        {},
         "notes":         {},
+        _PENDING_SECTION: {},
     }
 
 def load_memory() -> dict:
@@ -70,6 +86,20 @@ def load_memory() -> dict:
         except Exception as e:
             print(f"[Memory] ⚠️ Load error: {e}")
             return _empty_memory()
+
+
+def _entry_confidence(entry: dict | str | None) -> str:
+    """Read the confidence level from a memory entry, defaulting to 'high'."""
+    if isinstance(entry, dict):
+        return str(entry.get("confidence", CONF_HIGH))
+    return CONF_HIGH
+
+
+def _entry_source(entry: dict | str | None) -> str | None:
+    """Read the source utterance snippet from a memory entry."""
+    if isinstance(entry, dict):
+        return entry.get("source")
+    return None
 
 def _all_entries(memory: dict) -> list[tuple]:
     entries = []
@@ -148,8 +178,16 @@ def _recursive_update(target: dict, updates: dict) -> bool:
                 changed = True
         else:
             new_val  = _truncate_value(str(value["value"] if isinstance(value, dict) else value))
-            entry    = {"value": new_val, "updated": datetime.now().strftime("%Y-%m-%d")}
+            # Preserve existing confidence/source when overwriting a value,
+            # unless the update explicitly supplies new ones.
             existing = target.get(key, {})
+            entry = {
+                "value": new_val,
+                "updated": datetime.now().strftime("%Y-%m-%d"),
+                "confidence": value.get("confidence", existing.get("confidence", CONF_HIGH) if isinstance(existing, dict) else CONF_HIGH),
+                "source": value.get("source", existing.get("source") if isinstance(existing, dict) else None),
+                "feedback": {"helpful": 0, "not_helpful": 0, "corrections": []},
+            }
             if not isinstance(existing, dict) or existing.get("value") != new_val:
                 target[key] = entry
                 changed = True
@@ -163,7 +201,71 @@ def update_memory(memory_update: dict) -> dict:
     if _recursive_update(memory, memory_update):
         save_memory(memory)
         print(f"[Memory] 💾 Saved: {list(memory_update.keys())}")
+        # ── Graph integration: every key-value save also becomes a graph node ──
+        try:
+            _sync_memory_to_graph(memory_update)
+        except Exception:
+            # Graph sync must never block a memory write
+            pass
     return memory
+
+
+def _graph_enabled() -> bool:
+    """Check if cerebro_graph is importable (numpy available)."""
+    try:
+        import cerebro_graph  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _get_graph():
+    """Lazy import of cerebro_graph module."""
+    from memory import cerebro_graph
+    return cerebro_graph
+
+
+def _sync_memory_to_graph(memory_update: dict) -> None:
+    """Create/update graph nodes for every new or changed memory entry.
+
+    Each memory key becomes a node; the value is stored as node properties.
+    Identity entries get 'person' type, preferences get 'preference', etc.
+    """
+    if not _graph_enabled():
+        return
+    cg = _get_graph()
+    type_map = {
+        "identity": "person",
+        "preferences": "preference",
+        "projects": "project",
+        "relationships": "person",
+        "wishes": "wish",
+        "notes": "note",
+    }
+    for category, items in memory_update.items():
+        if category == _PENDING_SECTION or not isinstance(items, dict):
+            continue
+        node_type = type_map.get(category, "concept")
+        for key, entry in items.items():
+            val = _entry_value(entry)
+            if not val:
+                continue
+            props = {
+                "category": category,
+                "key": key,
+                "value": val,
+                "updated": entry.get("updated", "") if isinstance(entry, dict) else "",
+                "confidence": entry.get("confidence", CONF_HIGH) if isinstance(entry, dict) else CONF_HIGH,
+            }
+            source = entry.get("source") if isinstance(entry, dict) else None
+            if source:
+                props["source"] = source
+            cg.upsert_node(
+                entity=f"{category}/{key}",
+                node_type=node_type,
+                label=key.replace("_", " ").title(),
+                properties=props,
+            )
 
 def _entry_value(entry) -> str:
     """Accept both the {'value': ..., 'updated': ...} shape and a bare string,
@@ -380,6 +482,222 @@ def search_memory(query: str, limit: int = 8) -> str:
     return head + "\n" + "\n".join(lines) + more
 
 
+def semantic_search_memory(query: str, top_k: int = 5) -> str:
+    """Semantic search across the knowledge graph using TF-IDF cosine similarity.
+
+    Falls back to lexical search if cerebro_graph is unavailable or has no nodes.
+    Returns results interleaved with lexical matches for maximum recall.
+    """
+    if not _graph_enabled():
+        return search_memory(query, limit=top_k)
+
+    cg = _get_graph()
+    try:
+        graph_results = cg.semantic_query(query, top_k=top_k, depth=1)
+    except Exception:
+        return search_memory(query, limit=top_k)
+
+    if not graph_results:
+        return search_memory(query, limit=top_k)
+
+    lines = []
+    for r in graph_results:
+        props = r.get("properties", {})
+        val = props.get("value", "")
+        cat = props.get("category", "unknown")
+        key = props.get("key", r.get("entity", ""))
+        score = r.get("relevance_score", 0)
+        conf = props.get("confidence", "high")
+        conf_mark = {"high": "●", "medium": "◐", "low": "○"}.get(conf, "●")
+        lines.append(f"  {conf_mark} {cat}/{_pretty(key)}: {val}  (relevance {score:.2f})")
+        # Show multi-hop connections
+        conns = r.get("connections", [])
+        if conns:
+            for c in conns[:3]:
+                direction = "→" if c["direction"] == "out" else "←"
+                lines.append(f"      {direction} {c['relation']} {c.get('target', c.get('source', ''))}")
+
+    head = f"Semantic matches for '{query}':"
+    return head + "\n" + "\n".join(lines)
+
+
+def get_graph_relationships(category: str, key: str) -> list[dict]:
+    """Return graph connections for a specific memory entry (multi-hop neighbors)."""
+    if not _graph_enabled():
+        return []
+    cg = _get_graph()
+    entity = f"{category}/{key}"
+    try:
+        results = cg.semantic_query(entity, top_k=1, depth=2)
+    except Exception:
+        return []
+    if not results:
+        return []
+    conns = results[0].get("connections", [])
+    return conns if isinstance(conns, list) else []
+
+
+# ── Feedback tracking ─────────────────────────────────────────────────────────
+
+def _ensure_feedback_fields(entry: dict) -> dict:
+    """Make sure an entry has feedback tracking fields."""
+    entry.setdefault("feedback", {})
+    entry["feedback"].setdefault("helpful", 0)
+    entry["feedback"].setdefault("not_helpful", 0)
+    entry["feedback"].setdefault("corrections", [])
+    return entry
+
+
+def feedback_helpful(category: str, key: str) -> str:
+    """Record that the user found a memory helpful (thumbs up)."""
+    memory = load_memory()
+    cat = memory.get(category, {})
+    if not isinstance(cat, dict) or key not in cat:
+        return f"Not found: {category}/{key}"
+    entry = _ensure_feedback_fields(cat[key])
+    entry["feedback"]["helpful"] += 1
+    update_memory({category: {key: cat[key]}})
+    return f"Marked helpful: {category}/{key}"
+
+
+def feedback_not_helpful(category: str, key: str) -> str:
+    """Record that the user found a memory unhelpful (thumbs down)."""
+    memory = load_memory()
+    cat = memory.get(category, {})
+    if not isinstance(cat, dict) or key not in cat:
+        return f"Not found: {category}/{key}"
+    entry = _ensure_feedback_fields(cat[key])
+    entry["feedback"]["not_helpful"] += 1
+    update_memory({category: {key: cat[key]}})
+    return f"Marked not helpful: {category}/{key}"
+
+
+def feedback_correct(category: str, key: str, correction: str) -> str:
+    """Record a user correction for a memory value and update it."""
+    memory = load_memory()
+    cat = memory.get(category, {})
+    if not isinstance(cat, dict) or key not in cat:
+        return f"Not found: {category}/{key}"
+    entry = _ensure_feedback_fields(cat[key])
+    entry["feedback"]["corrections"].append({
+        "old": entry.get("value", ""),
+        "new": correction,
+        "at": datetime.now().strftime("%Y-%m-%d"),
+    })
+    entry["value"] = _truncate_value(correction)
+    entry["updated"] = datetime.now().strftime("%Y-%m-%d")
+    update_memory({category: {key: entry}})
+    return f"Corrected: {category}/{key} = {correction}"
+
+
+# ── Follow-up suggestions ────────────────────────────────────────────────────
+
+def get_followup_suggestions(limit: int = 5) -> list[dict]:
+    """Generate follow-up question suggestions from stored memories.
+
+    Looks at projects, preferences, and relationships to suggest
+    natural follow-ups the user might want to continue.
+    """
+    memory = load_memory()
+    suggestions: list[dict] = []
+
+    # Projects → progress check-ins
+    projects = memory.get("projects", {})
+    if isinstance(projects, dict):
+        for key, entry in projects.items():
+            val = _entry_value(entry)
+            if not val:
+                continue
+            suggestions.append({
+                "type": "project_checkin",
+                "question": f"How's {val} coming along?",
+                "context": f"projects/{key}",
+                "priority": 2,
+            })
+
+    # Preferences → preference deep-dive
+    prefs = memory.get("preferences", {})
+    if isinstance(prefs, dict):
+        for key, entry in prefs.items():
+            val = _entry_value(entry)
+            if not val:
+                continue
+            suggestions.append({
+                "type": "preference_followup",
+                "question": f"Still liking {val}?",
+                "context": f"preferences/{key}",
+                "priority": 1,
+            })
+
+    # Relationships → people check-ins
+    rels = memory.get("relationships", {})
+    if isinstance(rels, dict):
+        for key, entry in rels.items():
+            val = _entry_value(entry)
+            if not val:
+                continue
+            suggestions.append({
+                "type": "relationship_checkin",
+                "question": f"How is {val} doing?",
+                "context": f"relationships/{key}",
+                "priority": 1,
+            })
+
+    # Sort by priority then cap
+    suggestions.sort(key=lambda s: s["priority"])
+    return suggestions[:limit]
+
+
+# ── Export / Import ──────────────────────────────────────────────────────────
+
+def export_memories() -> str:
+    """Export all memories to a JSON string for backup or portability."""
+    memory = load_memory()
+    return json.dumps(memory, indent=2, ensure_ascii=False)
+
+
+def import_memories(json_text: str, merge: bool = True) -> str:
+    """Import memories from a JSON string.
+
+    If merge=True, existing keys are preserved (new keys only).
+    If merge=False, the entire store is replaced.
+    """
+    try:
+        data = json.loads(json_text)
+    except json.JSONDecodeError as e:
+        return f"Import failed: invalid JSON ({e})"
+
+    if not isinstance(data, dict):
+        return "Import failed: top-level must be a JSON object"
+
+    valid_cats = {"identity", "preferences", "projects", "relationships", "wishes", "notes", _PENDING_SECTION}
+    cleaned = {}
+    for cat in valid_cats:
+        if cat in data and isinstance(data[cat], dict):
+            cleaned[cat] = data[cat]
+
+    if merge:
+        memory = load_memory()
+        for cat, items in cleaned.items():
+            if not isinstance(items, dict):
+                continue
+            if cat not in memory or not isinstance(memory[cat], dict):
+                memory[cat] = {}
+            for key, entry in items.items():
+                if key not in memory[cat] or not memory[cat][key]:
+                    memory[cat][key] = entry
+        save_memory(memory)
+    else:
+        # Replace: start from empty, add imported cats
+        base = _empty_memory()
+        for cat, items in cleaned.items():
+            base[cat] = items
+        save_memory(base)
+
+    total = sum(len(v) for v in cleaned.values() if isinstance(v, dict))
+    return f"Imported {total} memory entries"
+
+
 def all_entries_for_ui() -> list[dict]:
     """Flat list for the memory panel: what ULTRON knows, and when it learned it.
     Sorted newest first so the panel opens on what changed most recently."""
@@ -397,6 +715,9 @@ def all_entries_for_ui() -> list[dict]:
                 "key":      key,
                 "value":    val,
                 "updated":  (entry.get("updated", "") if isinstance(entry, dict) else ""),
+                "confidence": (entry.get("confidence", CONF_HIGH) if isinstance(entry, dict) else CONF_HIGH),
+                "source":     (entry.get("source") if isinstance(entry, dict) else None),
+                "entry":     entry,  # raw entry for confidence/source lookups
             })
     rows.sort(key=lambda r: (r["updated"] or "0000-00-00"), reverse=True)
     return rows
@@ -407,6 +728,76 @@ def remember(key: str, value: str, category: str = "notes") -> str:
         category = "notes"
     update_memory({category: {key: {"value": value}}})
     return f"Remembered: {category}/{key} = {value}"
+
+
+def edit_memory(key: str, value: str, category: str = "notes",
+                confidence: str | None = None, source: str | None = None) -> str:
+    """Edit an existing memory entry, preserving metadata unless overridden."""
+    valid = {"identity", "preferences", "projects", "relationships", "wishes", "notes", _PENDING_SECTION}
+    if category not in valid:
+        category = "notes"
+    update = {category: {key: {"value": value}}}
+    if confidence is not None:
+        update[category][key]["confidence"] = confidence
+    if source is not None:
+        update[category][key]["source"] = source
+    update_memory(update)
+    return f"Updated: {category}/{key} = {value}"
+
+
+def get_pending_review() -> list[dict]:
+    """Return all low-confidence memories awaiting user confirmation."""
+    memory = load_memory()
+    pending = memory.get(_PENDING_SECTION, {})
+    if not isinstance(pending, dict):
+        return []
+    rows = []
+    for key, entry in pending.items():
+        rows.append({
+            "key": key,
+            "value": _entry_value(entry),
+            "updated": entry.get("updated", "") if isinstance(entry, dict) else "",
+            "source": entry.get("source", "") if isinstance(entry, dict) else "",
+            "confidence": entry.get("confidence", CONF_LOW) if isinstance(entry, dict) else CONF_LOW,
+        })
+    rows.sort(key=lambda r: (r["updated"] or "0000-00-00"), reverse=True)
+    return rows
+
+
+def confirm_pending(key: str) -> str:
+    """Move a pending memory from _pending into its proper category (inferred from key prefix)."""
+    memory = load_memory()
+    pending = memory.get(_PENDING_SECTION, {})
+    if not isinstance(pending, dict) or key not in pending:
+        return f"Not found in pending review: {key}"
+    entry = pending.pop(key)
+    # Infer category from key prefix (e.g. "preferences/likes_coffee" → preferences)
+    parts = key.split("/", 1)
+    if len(parts) == 2:
+        category, real_key = parts
+        if category not in memory or not isinstance(memory[category], dict):
+            category = "notes"
+            real_key = key
+    else:
+        category = "notes"
+        real_key = key
+    # Add entry to the new category in the same dict, then save once
+    if category not in memory or not isinstance(memory[category], dict):
+        memory[category] = {}
+    memory[category][real_key] = entry
+    save_memory(memory)
+    return f"Confirmed: {category}/{real_key} = {entry.get('value', '')}"
+
+
+def dismiss_pending(key: str) -> str:
+    """Remove a pending memory without saving it."""
+    memory = load_memory()
+    pending = memory.get(_PENDING_SECTION, {})
+    if not isinstance(pending, dict) or key not in pending:
+        return f"Not found in pending review: {key}"
+    del pending[key]
+    save_memory(memory)
+    return f"Dismissed: {key}"
 
 
 # ── Automatic memory extraction ──────────────────────────────────────────────
@@ -489,7 +880,9 @@ def _looks_like_name(v: str) -> bool:
     return any(c.isalpha() for c in v)
 
 
-def _save_if_new(category: str, key: str, value: str) -> bool:
+def _save_if_new(category: str, key: str, value: str,
+                 confidence: str = CONF_HIGH,
+                 source: str | None = None) -> bool:
     """Save a fact only if that key does not already exist. Returns True if saved."""
     memory = load_memory()
     cat = memory.get(category, {})
@@ -497,26 +890,19 @@ def _save_if_new(category: str, key: str, value: str) -> bool:
         cat = {}
     if key in cat and cat[key]:
         return False  # already known — don't overwrite the Boss's data
-    update_memory({category: {key: {"value": value}}})
+    update_memory({category: {key: {"value": value, "confidence": confidence, "source": source}}})
     return True
 
 
-def _save_if_new(category: str, key: str, value: str) -> bool:
-    """Save a fact only if that key does not already exist. Returns True if saved."""
-    memory = load_memory()
-    cat = memory.get(category, {})
-    if not isinstance(cat, dict):
-        cat = {}
-    if key in cat and cat[key]:
-        return False  # already known — don't overwrite the Boss's data
-    update_memory({category: {key: {"value": value}}})
-    return True
-
-
-def extract_and_save_memory(text: str, user_name: str | None = None) -> list[str]:
+def extract_and_save_memory(text: str, user_name: str | None = None) -> list[dict]:
     """
     Scan a user utterance for memory-worthy personal facts and save them
-    automatically.  Returns a list of human-readable save confirmations.
+    automatically.  Returns a list of structured result dicts:
+
+        {"category", "key", "value", "confidence", "source", "auto_saved"}
+
+    High-confidence facts are auto-saved. Low-confidence facts go to a pending
+    review queue and await user confirmation.
 
     This runs after every user turn so Ultron actually remembers the Boss
     across sessions instead of hoping the model calls save_memory.
@@ -524,9 +910,9 @@ def extract_and_save_memory(text: str, user_name: str | None = None) -> list[str
     if not text or not text.strip():
         return []
 
-    saved: list[str] = []
+    saved: list[dict] = []
 
-    # ── Name ──
+    # ── Name ── (high confidence — explicit identity statement)
     for pat in _NAME_TRIGGERS:
         m = pat.search(text)
         if m:
@@ -534,65 +920,88 @@ def extract_and_save_memory(text: str, user_name: str | None = None) -> list[str
             if _looks_like_name(name):
                 if user_name and name.lower() == user_name.lower():
                     break
-                if _save_if_new("identity", "name", name):
-                    saved.append(f"identity/name = {name}")
+                entry = {
+                    "category": "identity", "key": "name", "value": name,
+                    "confidence": CONF_HIGH, "source": m.group(0)[:120],
+                    "auto_saved": _save_if_new("identity", "name", name, CONF_HIGH, m.group(0)[:120]),
+                }
+                saved.append(entry)
             break
 
-    # ── City / location ──
+    # ── City / location ── (high confidence)
     for pat in _CITY_TRIGGERS:
         m = pat.search(text)
         if m:
             city = _clean_value(m.group(1))
             if city and _looks_like_name(city):
-                if _save_if_new("identity", "city", city):
-                    saved.append(f"identity/city = {city}")
+                entry = {
+                    "category": "identity", "key": "city", "value": city,
+                    "confidence": CONF_HIGH, "source": m.group(0)[:120],
+                    "auto_saved": _save_if_new("identity", "city", city, CONF_HIGH, m.group(0)[:120]),
+                }
+                saved.append(entry)
             break
 
-    # ── Job / occupation ──
+    # ── Job / occupation ── (high confidence)
     for pat in _JOB_TRIGGERS:
         m = pat.search(text)
         if m:
             job = _clean_value(m.group(1))
             if job:
-                if _save_if_new("identity", "job", job):
-                    saved.append(f"identity/job = {job}")
+                entry = {
+                    "category": "identity", "key": "job", "value": job,
+                    "confidence": CONF_HIGH, "source": m.group(0)[:120],
+                    "auto_saved": _save_if_new("identity", "job", job, CONF_HIGH, m.group(0)[:120]),
+                }
+                saved.append(entry)
             break
 
-    # ── Language ──
+    # ── Language ── (high confidence)
     for pat in _LANG_TRIGGERS:
         m = pat.search(text)
         if m:
             lang = m.group(1).strip()
             if lang:
-                if _save_if_new("identity", "language", lang):
-                    saved.append(f"identity/language = {lang}")
+                entry = {
+                    "category": "identity", "key": "language", "value": lang,
+                    "confidence": CONF_HIGH, "source": m.group(0)[:120],
+                    "auto_saved": _save_if_new("identity", "language", lang, CONF_HIGH, m.group(0)[:120]),
+                }
+                saved.append(entry)
             break
 
-    # ── Preferences (simple "I like X") ──
+    # ── Preferences (simple "I like X") ── (medium confidence — could be temporary)
     for pat in _PREF_TRIGGERS:
         m = pat.search(text)
         if m:
             if m.lastindex and m.lastindex >= 2:
-                # "my favorite X is Y" -> key = favorite_X, value = Y
                 key = f"favorite_{_clean_value(m.group(1)).strip().lower().replace(' ', '_')}"
                 val = _clean_value(m.group(2))
             else:
                 key = f"likes_{_clean_value(m.group(1)).strip().lower().replace(' ', '_')}"
                 val = "true"
             if key and val:
-                if _save_if_new("preferences", key, val):
-                    saved.append(f"preferences/{key} = {val}")
+                entry = {
+                    "category": "preferences", "key": key, "value": val,
+                    "confidence": CONF_MEDIUM, "source": m.group(0)[:120],
+                    "auto_saved": _save_if_new("preferences", key, val, CONF_MEDIUM, m.group(0)[:120]),
+                }
+                saved.append(entry)
             break
 
-    # ── Projects ──
+    # ── Projects ── (medium confidence — could change)
     for pat in _PROJECT_TRIGGERS:
         m = pat.search(text)
         if m:
             proj = _clean_value(m.group(1))
             if proj:
                 key = proj.strip().lower().replace(' ', '_').replace('-', '_')
-                if _save_if_new("projects", key, proj):
-                    saved.append(f"projects/{key} = {proj}")
+                entry = {
+                    "category": "projects", "key": key, "value": proj,
+                    "confidence": CONF_MEDIUM, "source": m.group(0)[:120],
+                    "auto_saved": _save_if_new("projects", key, proj, CONF_MEDIUM, m.group(0)[:120]),
+                }
+                saved.append(entry)
             break
 
     return saved
@@ -656,7 +1065,7 @@ def pop_last_session() -> dict | None:
             sessions = memory.get("sessions", [])
             if not isinstance(sessions, list) or not sessions:
                 return None
-            entry = sessions.pop()          # remove the last entry
+            entry: dict | None = sessions.pop()  # remove the last entry
             memory["sessions"] = sessions
             MEMORY_PATH.write_text(
                 json.dumps(memory, indent=2, ensure_ascii=False),
