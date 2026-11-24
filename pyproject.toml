@@ -48,12 +48,12 @@ target-version = "py311"
 
 # Keep the ruleset conservative so existing code passes without a big rewrite.
 # New contributions should introduce zero *new* violations of these rules.
-[tool.lint]
+[tool.ruff.lint]
 select = ["E", "F", "B", "I"]
 ignore = ["E501", "B008"]
 unfixable = ["F401"]
 
-[tool.lint.isort]
+[tool.ruff.lint.isort]
 known-first-party = ["actions", "core", "memory", "dashboard", "plugins"]
 known-third-party = [
     "google", "numpy", "sounddevice", "PyQt6", "edge_tts", "miniaudio",

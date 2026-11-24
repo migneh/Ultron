@@ -21,6 +21,8 @@ import hashlib
 import json
 import os
 import platform
+import re
+import shlex
 import subprocess
 import threading
 import time
@@ -93,13 +95,40 @@ def _classify(cmd: str) -> str:
     for pat in _DESTRUCTIVE:
         if pat in low:
             return "refuse"
-    token = _first_token(cmd)
+    # A safe executable prefix does not make a shell program safe. Reject
+    # chaining, substitution, expansion, redirection and multiline commands.
+    if any(c in cmd for c in ";&|<>$`\n\r()%{}\\"):
+        return "confirm"
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        return "confirm"
+    if not parts:
+        return "confirm"
+    token = parts[0].lower()
+    args = [part.lower() for part in parts[1:]]
     if token in _SAFE_READ_ONLY:
+        # These utilities have state-changing modes despite familiar names.
+        if token in {"date", "time", "hostname", "ifconfig", "ip"} and args:
+            return "confirm"
+        if token == "ipconfig" and any(a not in {"/all", "/displaydns", "/?"} for a in args):
+            return "confirm"
         if token == "git":
-            parts = low.split()
-            if len(parts) > 1 and parts[1] not in _GIT_READ_ONLY:
+            if not args:
+                return "direct"
+            sub, *options = args
+            if sub not in _GIT_READ_ONLY:
                 return "confirm"
-            return "direct"
+            if sub in {"branch", "remote"}:
+                allowed = {"--list", "-a", "--all", "-r", "--remotes", "-v", "--verbose"}
+                return "direct" if all(a in allowed for a in options) else "confirm"
+            # Git can launch helpers, write output or invoke external diffs.
+            allowed = {"--oneline", "--short", "-s", "--stat", "--name-only",
+                       "--name-status", "--no-pager", "--no-ext-diff", "--no-textconv",
+                       "--abbrev-ref", "--show-toplevel", "--show-prefix"}
+            if any(a.startswith("-") and a not in allowed and not re.fullmatch(r"-\d+", a)
+                   for a in options):
+                return "confirm"
         return "direct"
     for hint in _STATE_CHANGING_HINTS:
         if hint in low:

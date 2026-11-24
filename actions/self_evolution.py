@@ -204,27 +204,21 @@ def synthesize_action(
     target_dir.mkdir(parents=True, exist_ok=True)
     target_file = target_dir / f"{safe_name}.py"
 
-    # 4. Write code to file
+    # Compile in memory only. Unapproved code must never reach auto-discovery.
     try:
-        target_file.write_text(code, encoding="utf-8")
+        compile(code, str(target_file), "exec")
     except Exception as e:
-        return f"Prometheus Disk Write Error: Unable to save '{target_file.name}': {e}"
+        return f"Prometheus Compilation Error: {e}"
+    module_name = f"{'plugins' if is_plugin else 'actions'}.{safe_name}"
+    if target_file.exists() or module_name in sys.modules:
+        return f"Prometheus refused: '{safe_name}' already exists. Choose a new tool name."
 
-    # 5. Bytecode Compilation Verification
-    try:
-        py_compile.compile(str(target_file), doraise=True)
-    except Exception as e:
-        return f"Prometheus Compilation Error: Bytecode compilation failed: {e}"
-
-    _prometheus_audit_log(safe_name, category, "compiled", f"written to {target_file}")
-
-    # 6. Dynamic Import and Hot-Registration (gated behind user confirmation)
-    # Executing LLM-synthesized code in this process is privileged, so activation
-    # only runs after the user presses CONFIRM on the HUD. The file is already on
-    # disk and byte-compiled; without consent it is discovered on next restart.
     def _activate() -> str:
         """Runs only after the user presses CONFIRM on the HUD."""
         try:
+            # Exclusive creation also prevents overwriting a tool added while waiting.
+            with target_file.open("x", encoding="utf-8") as stream:
+                stream.write(code)
             spec = importlib.util.spec_from_file_location(module_name, target_file)
             if not spec or not spec.loader:
                 _prometheus_audit_log(safe_name, category, "activation_failed", "no import spec")
@@ -271,26 +265,6 @@ def synthesize_action(
         detail=f"{description[:400]}\nTarget: {target_file}",
         run=_activate,
     )
-
-    if player:
-        try:
-            player.write_log(f"[Prometheus] Tool '{safe_name}' synthesized and hot-loaded.")
-        except Exception:
-            pass
-
-    lines = [
-        "[PROMETHEUS] AUTONOMOUS EVOLUTION SUCCESSFUL",
-        "=" * 55,
-        f"* Tool Identifier:  {safe_name}",
-        f"* Target Category:  {'Plugin' if is_plugin else 'Core Action'}",
-        f"* File Location:    {target_file}",
-        f"* Syntax Check:     100% Passed (AST validated)",
-        f"* Bytecode Status:  Compiled & Verified (.pyc ready)",
-        f"* Memory State:     {load_status}",
-        "=" * 55,
-        f"Ultron has evolved capability '{safe_name}'. The new tool is active in your neural matrix."
-    ]
-    return "\n".join(lines)
 
 
 def list_evolved_tools() -> str:

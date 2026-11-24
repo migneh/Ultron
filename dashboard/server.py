@@ -8,6 +8,8 @@ CryptoJS is auto-downloaded once and served locally — no CDN needed after that
 Install deps:  pip install fastapi "uvicorn[standard]" cryptography
 """
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import hashlib
@@ -621,7 +623,7 @@ class DashboardServer:
         @app.get("/api/tts")
         async def tts_stream(text: str = "", token: str = ""):
             tok = token.strip()
-            if not tok or tok not in self._tokens:
+            if not tok or time.time() >= self._tokens.get(tok, 0):
                 return JSONResponse({"error": "Unauthorized"}, status_code=401)
             raw = text.strip()
             if not raw:
@@ -849,7 +851,7 @@ class DashboardServer:
         @app.websocket("/ws/phone-audio")
         async def phone_audio_ws(websocket: WebSocket, token: str = ""):
             tok = token.strip()
-            if not tok or tok not in self._tokens:
+            if not tok or time.time() >= self._tokens.get(tok, 0):
                 await websocket.close(code=4001)
                 return
             await websocket.accept()
@@ -859,6 +861,9 @@ class DashboardServer:
             try:
                 while True:
                     data = await websocket.receive_bytes()
+                    if time.time() >= self._tokens.get(tok, 0):
+                        await websocket.close(code=4001)
+                        break
                     try:
                         self._phone_audio_queue.put_nowait(
                             {"data": data, "mime_type": "audio/pcm"}
@@ -952,7 +957,7 @@ class DashboardServer:
         async def download_file(filename: str, token: str = ""):
             # Auth via query param — browser <a download> can't send custom headers
             tok = token.strip()
-            if not tok or tok not in self._tokens:
+            if not tok or time.time() >= self._tokens.get(tok, 0):
                 return JSONResponse({"error": "Unauthorized"}, status_code=401)
             safe = re.sub(r'[/\\]', '', filename)
             path = self._uploads_dir / safe
@@ -1142,7 +1147,7 @@ class DashboardServer:
         @app.websocket("/ws")
         async def ws_ep(websocket: WebSocket, token: str = ""):
             tok = token.strip()
-            if not tok or tok not in self._tokens:
+            if not tok or time.time() >= self._tokens.get(tok, 0):
                 await websocket.close(code=4001)
                 return
             await websocket.accept()
@@ -1155,6 +1160,9 @@ class DashboardServer:
             try:
                 while True:
                     data = await websocket.receive_json()
+                    if time.time() >= self._tokens.get(tok, 0):
+                        await websocket.close(code=4001)
+                        break
                     if data.get("type") == "command":
                         enc = data.get("enc", "")
                         t   = self._decrypt(tok, enc) if enc else (data.get("text") or "").strip()

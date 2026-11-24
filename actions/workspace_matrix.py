@@ -346,10 +346,10 @@ def _launch_terminal(project_path: Optional[str] = None) -> str:
         if _OS == "Windows":
             # Prefer Windows Terminal (wt.exe)
             if shutil.which("wt"):
-                subprocess.Popen(f'wt.exe -d "{target_str}"', shell=True)
+                subprocess.Popen(["wt.exe", "-d", target_str])
                 return f"Windows Terminal opened at '{target_dir.name}'"
             # Fallback to PowerShell
-            subprocess.Popen(f'start powershell.exe -NoExit -Command "Set-Location \'{target_str}\'"', shell=True)
+            subprocess.Popen(["powershell.exe", "-NoExit"], cwd=target_str)
             return f"PowerShell opened at '{target_dir.name}'"
         elif _OS == "Darwin":
             subprocess.run(["open", "-a", "Terminal", target_str], check=False)

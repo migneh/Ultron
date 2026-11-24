@@ -31,6 +31,7 @@ def _get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_DB_PATH), timeout=10.0)
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA foreign_keys = ON")
     with conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS nodes (
@@ -100,7 +101,7 @@ def _get_corpus_vocab(conn: sqlite3.Connection) -> dict[str, int]:
     cur = conn.cursor()
     cur.execute("SELECT entity, label, properties FROM nodes")
     rows = cur.fetchall()
-    counts = collections.Counter()
+    counts: collections.Counter[str] = collections.Counter()
     for entity, label, props in rows:
         tokens = _tokenize(f"{entity} {label} {props}")
         counts.update(tokens)
@@ -138,10 +139,9 @@ def upsert_node(
                     properties = excluded.properties,
                     updated_at = excluded.updated_at
             """, (clean_entity, clean_type, clean_label, props_json, now, now))
-            node_id = cur.lastrowid
-            if not node_id:
-                cur.execute("SELECT id FROM nodes WHERE entity = ?", (clean_entity,))
-                node_id = cur.fetchone()[0]
+            # lastrowid can refer to a different prior insert on UPSERT conflict.
+            cur.execute("SELECT id FROM nodes WHERE entity = ?", (clean_entity,))
+            node_id = cur.fetchone()[0]
 
             # Update semantic embedding
             vocab = _get_corpus_vocab(conn)
@@ -152,7 +152,7 @@ def upsert_node(
                 VALUES (?, ?)
             """, (node_id, json.dumps(vec.tolist())))
 
-        return node_id
+        return int(node_id)
     finally:
         conn.close()
 
@@ -165,8 +165,17 @@ def link_entities(
     properties: dict | None = None
 ) -> str:
     """Forms a weighted, directed semantic edge between two entity nodes."""
-    s_id = upsert_node(source_entity)
-    t_id = upsert_node(target_entity)
+    # Linking must not reset existing labels, types and properties.
+    def ensure(entity):
+        conn = _get_db()
+        try:
+            row = conn.execute("SELECT id FROM nodes WHERE entity=?",
+                               (entity.strip().lower(),)).fetchone()
+        finally:
+            conn.close()
+        return row[0] if row else upsert_node(entity)
+    s_id = ensure(source_entity)
+    t_id = ensure(target_entity)
 
     rel_clean = (relation or "related_to").strip().lower()
     props_json = json.dumps(properties or {}, ensure_ascii=False)
@@ -198,18 +207,16 @@ def semantic_query(query: str, top_k: int = 5, depth: int = 1) -> list[dict]:
         q_vec = _build_vector(query, vocab)
         cur = conn.cursor()
 
-        cur.execute("SELECT node_id, vector_json FROM embeddings")
-        emb_rows = cur.fetchall()
-
+        # Vocabulary changes on every insert/update. Persisted vectors may have
+        # different dimensions OR the same dimensions with different token order.
+        # Compute against one shared vocabulary snapshot for correct comparisons.
+        cur.execute("SELECT id, entity, label, properties FROM nodes")
         scores = []
-        for n_id, v_json in emb_rows:
-            try:
-                v = np.array(json.loads(v_json), dtype=np.float32)
-                # Cosine similarity
-                sim = float(np.dot(q_vec, v))
+        for n_id, entity, label, props in cur.fetchall():
+            vector = _build_vector(f"{entity} {label} {props}", vocab)
+            sim = float(np.dot(q_vec, vector))
+            if sim > 0:
                 scores.append((n_id, sim))
-            except Exception:
-                continue
 
         scores.sort(key=lambda t: t[1], reverse=True)
         top_nodes = scores[:top_k]
@@ -227,26 +234,7 @@ def semantic_query(query: str, top_k: int = 5, depth: int = 1) -> list[dict]:
             except Exception:
                 props = {}
 
-            # Multi-hop sub-graph traversal
-            connections = []
-            if depth >= 1:
-                cur.execute("""
-                    SELECT e.relation, e.weight, n.entity, n.label
-                    FROM edges e
-                    JOIN nodes n ON e.target_id = n.id
-                    WHERE e.source_id = ?
-                """, (nid,))
-                for rel, wt, t_ent, t_lbl in cur.fetchall():
-                    connections.append({"direction": "out", "relation": rel, "target": t_ent, "label": t_lbl, "weight": wt})
-
-                cur.execute("""
-                    SELECT e.relation, e.weight, n.entity, n.label
-                    FROM edges e
-                    JOIN nodes n ON e.source_id = n.id
-                    WHERE e.target_id = ?
-                """, (nid,))
-                for rel, wt, s_ent, s_lbl in cur.fetchall():
-                    connections.append({"direction": "in", "relation": rel, "source": s_ent, "label": s_lbl, "weight": wt})
+            connections = _connections(conn, nid, depth)
 
             results.append({
                 "id": nid,
@@ -283,5 +271,60 @@ def get_graph_metrics() -> dict:
             "node_types": types_breakdown,
             "storage_path": str(_DB_PATH),
         }
+    finally:
+        conn.close()
+
+
+def _connections(conn: sqlite3.Connection, node_id: int, depth: int) -> list[dict]:
+    """Bounded breadth-first traversal, also used for exact entity lookups."""
+    seen = {node_id}
+    frontier = {node_id}
+    result = []
+    edge_seen = set()
+    for _ in range(min(max(depth, 0), 4)):
+        following = set()
+        for current in sorted(frontier):
+            rows = conn.execute("""
+                SELECT e.id, e.source_id, e.target_id, e.relation, e.weight,
+                       s.entity, s.label, t.entity, t.label
+                FROM edges e JOIN nodes s ON s.id=e.source_id
+                             JOIN nodes t ON t.id=e.target_id
+                WHERE e.source_id=? OR e.target_id=?
+            """, (current, current)).fetchall()
+            for eid, src, tgt, relation, weight, se, sl, te, tl in rows:
+                if eid in edge_seen:
+                    continue
+                edge_seen.add(eid)
+                outgoing = src == current
+                other = tgt if outgoing else src
+                item = {"direction": "out" if outgoing else "in",
+                        "relation": relation, "weight": weight,
+                        "label": tl if outgoing else sl}
+                item["target" if outgoing else "source"] = te if outgoing else se
+                result.append(item)
+                if len(result) >= 100:
+                    return result
+                if other not in seen:
+                    following.add(other)
+        seen.update(following)
+        frontier = following
+    return result
+
+
+def get_connections(entity: str, depth: int = 2) -> list[dict]:
+    conn = _get_db()
+    try:
+        row = conn.execute("SELECT id FROM nodes WHERE entity=?",
+                           (entity.strip().lower(),)).fetchone()
+        return _connections(conn, row[0], depth) if row else []
+    finally:
+        conn.close()
+
+
+def delete_node(entity: str) -> None:
+    conn = _get_db()
+    try:
+        with conn:
+            conn.execute("DELETE FROM nodes WHERE entity=?", (entity.strip().lower(),))
     finally:
         conn.close()

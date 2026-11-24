@@ -8,6 +8,7 @@ import tempfile
 import platform
 from pathlib import Path
 from datetime import datetime
+from core import confirm as confirm_gate
 
 try:
     import pyautogui
@@ -89,16 +90,21 @@ def _execute_generated_code(code: str, player=None) -> str:
         lines = code.split("\n")
         code  = "\n".join(lines[1:-1]).strip()
 
-    sandbox      = _build_sandbox()
-    output_lines = []
-    sandbox["__builtins__"]["print"] = lambda *a: output_lines.append(" ".join(str(x) for x in a))
+    def _run():
+        sandbox = _build_sandbox()
+        output_lines = []
+        sandbox["__builtins__"]["print"] = lambda *a: output_lines.append(" ".join(str(x) for x in a))
+        try:
+            exec(compile(code, "<ultron_desktop>", "exec"), sandbox)
+            return "\n".join(output_lines) if output_lines else "Done."
+        except Exception as e:
+            return f"Execution error: {e}"
 
-    try:
-        exec(compile(code, "<ultron_desktop>", "exec"), sandbox)
-        return "\n".join(output_lines) if output_lines else "Done."
-    except Exception as e:
-        print(f"[Desktop] Exec error: {e}\nCode:\n{code[:300]}")
-        return f"Execution error: {e}"
+    return confirm_gate.request(
+        key="desktop:generated_code", title="Run generated desktop automation",
+        detail="Generated Python runs with your account permissions. Review before approving:\n" + code,
+        run=_run,
+    )
 
 
 def _ask_gemini_for_desktop_action(task: str) -> str:

@@ -67,7 +67,7 @@ from core.ui_design import (
     SPACE_XS, SPACE_SM, SPACE_MD, SPACE_LG, SPACE_XL, SPACE_2XL,
     font, primary_button, secondary_button, ghost_button, danger_button,
     style_input, style_combo, glass_panel, glass_card, toast,
-    apply_focus_ring, contrast_ratio, _colors,
+    apply_focus_ring, contrast_ratio, _colors, _lighten,
     AIStatusBadge, GestureStatusBadge, suggestion_row, keyboard_shortcuts_dialog, accessibility_panel,
 )
 
@@ -513,8 +513,9 @@ class HudCanvas(QWidget):
     def glance(self, dx: float, dy: float, hold: float = 1.1) -> None:
         """Ask the avatar to look somewhere for a moment (see HoloAvatar.glance)."""
         try:
-            if self._avatar is not None:
-                self._avatar.glance(dx, dy, hold)
+            avatar = self._win.hud._avatar
+            if avatar is not None:
+                avatar.glance(dx, dy, hold)
         except Exception:
             pass
 
@@ -2892,6 +2893,7 @@ class MemoryOverlay(_HudOverlay):
     the other half of that change — a memory you cannot inspect is a memory you
     cannot trust, and 'delete' has to be something the person can do."""
 
+    followup_requested = pyqtSignal(str)
     _OW = 520
 
     def __init__(self, parent=None):
@@ -3468,6 +3470,7 @@ class MemoryOverlay(_HudOverlay):
         lay.addWidget(hdr)
 
         try:
+            from memory.memory_manager import get_followup_suggestions
             suggestions = get_followup_suggestions(limit=4)
         except Exception:
             suggestions = []
@@ -3514,8 +3517,7 @@ class MemoryOverlay(_HudOverlay):
 
     def _on_followup_clicked(self, question: str):
         """Send a follow-up question as if the user typed it."""
-        self._input.setText(question)
-        self._send()
+        self.followup_requested.emit(question)
 
     # ── Export / Import ──
     def _export_memories(self):
@@ -3527,7 +3529,7 @@ class MemoryOverlay(_HudOverlay):
         if path:
             try:
                 Path(path).write_text(json_text, encoding="utf-8")
-                self.show_toast(f"Memories exported to {Path(path).name}", level="success")
+                toast(self, f"Memories exported to {Path(path).name}", level="success")
             except Exception as e:
                 QMessageBox.warning(self, "Export failed", str(e))
 
@@ -3540,7 +3542,7 @@ class MemoryOverlay(_HudOverlay):
             try:
                 json_text = Path(path).read_text(encoding="utf-8")
                 result = import_memories(json_text, merge=True)
-                self.show_toast(result, level="success")
+                toast(self, result, level="error" if result.startswith("Import failed") else "success")
                 QTimer.singleShot(0, self._rebuild)
             except Exception as e:
                 QMessageBox.warning(self, "Import failed", str(e))
@@ -4288,6 +4290,28 @@ class RemoteKeyOverlay(QWidget):
 
 
 class MainWindow(QMainWindow):
+    # ── keyboard shortcuts (discoverability) ───────────────────────────────
+    def keyPressEvent(self, event):
+        from PyQt6.QtGui import QKeySequence
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.key() == Qt.Key.Key_Slash:
+                # Ctrl+/ → show keyboard shortcuts help
+                dlg = keyboard_shortcuts_dialog(self)
+                dlg.exec()
+                return
+            if event.key() == Qt.Key.Key_K:
+                # Ctrl+K → focus the composer
+                self._input.setFocus()
+                return
+        if event.key() == Qt.Key.Key_Escape:
+            # Esc → close any open overlay
+            if self._overlay and self._overlay.isVisible():
+                self._overlay.hide()
+                return
+        super().keyPressEvent(event)
+
+    _toast_sig = pyqtSignal(str, str, int)
+    _gesture_sig = pyqtSignal(str)
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
@@ -4580,6 +4604,8 @@ class MainWindow(QMainWindow):
         self._metric_tmr.start(2000)
         self._update_metrics()
 
+        self._toast_sig.connect(self._display_toast)
+        self._gesture_sig.connect(self._on_gesture_detected)
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
@@ -6325,7 +6351,10 @@ class MainWindow(QMainWindow):
     # auto-dismiss. Used for confirmation, warnings, errors and info messages
     # that don't warrant a full dialog or log entry.
     def show_toast(self, message: str, level: str = "info", duration_ms: int = 4000):
-        """Show a toast notification anchored to the central widget."""
+        """Queue notification rendering on the GUI thread."""
+        self._toast_sig.emit(str(message), str(level), int(duration_ms))
+
+    def _display_toast(self, message: str, level: str, duration_ms: int):
         cw = self.centralWidget()
         return toast(cw, message, level=level, duration_ms=duration_ms)
 
@@ -6834,6 +6863,7 @@ class MainWindow(QMainWindow):
     def _open_memory_panel(self):
         ov = MemoryOverlay(parent=self.centralWidget())
         self._centre_overlay(ov)
+        ov.followup_requested.connect(self._on_suggestion_clicked)
         self._memory_overlay = ov
 
     # ── Irreversible-action confirmation ─────────────────────────────────────
@@ -6991,6 +7021,10 @@ class MainWindow(QMainWindow):
             self._ai_status.set_state(badge_state)
 
     # ── Project Minority gesture integration ─────────────────────────────
+    def write_log(self, text: str):
+        """Marshal activity messages from callbacks onto the GUI thread."""
+        self._log_sig.emit(str(text))
+
     def _setup_gesture_callback(self):
         """Register a callback with the gesture engine so detected hands-signs
         update the HUD badge in real time."""
@@ -7000,7 +7034,7 @@ class MainWindow(QMainWindow):
             )
             self._gesture_engine_running = bool(_GESTURE_RUNNING)
             self._gesture_status.set_state("engaged" if self._gesture_engine_running else "standby")
-            set_gesture_callback(self._on_gesture_detected)
+            set_gesture_callback(self._gesture_sig.emit)
         except Exception:
             # Gesture engine not available (OpenCV missing, no camera, etc.)
             self._gesture_engine_running = False
@@ -7014,6 +7048,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_gesture_status"):
             self._gesture_status.flash_detected(gesture_name)
         self.write_log(f"[Minority] Gesture: {gesture_name}")
+        if gesture_name == "OPEN_PALM" and callable(self.on_wake_manual):
+            self.on_wake_manual()
 
     def _toggle_gesture_engine(self):
         """Start or stop the Project Minority gesture engine."""
@@ -7040,8 +7076,12 @@ class MainWindow(QMainWindow):
         if self._gesture_overlay and self._gesture_overlay.isVisible():
             self._gesture_overlay.raise_()
             return
-        from actions.gesture_control import get_gesture_status, _GESTURE_RUNNING
-        ov = GestureOverlay(self.centralWidget(), get_gesture_status(), bool(_GESTURE_RUNNING))
+        try:
+            from actions.gesture_control import get_gesture_status, _GESTURE_RUNNING
+            status, running = get_gesture_status(), bool(_GESTURE_RUNNING)
+        except Exception as error:
+            status, running = f"Gesture engine unavailable: {error}", False
+        ov = GestureOverlay(self.centralWidget(), status, running)
         ov.gesture_toggle.connect(self._toggle_gesture_engine)
         ov.gesture_status_refresh.connect(self._refresh_gesture_status)
         self._centre_overlay(ov)
@@ -7310,8 +7350,9 @@ class UltronUI:
     def glance(self, dx: float, dy: float, hold: float = 1.1) -> None:
         """Ask the avatar to look somewhere for a moment (see HoloAvatar.glance)."""
         try:
-            if self._avatar is not None:
-                self._avatar.glance(dx, dy, hold)
+            avatar = self._win.hud._avatar
+            if avatar is not None:
+                avatar.glance(dx, dy, hold)
         except Exception:
             pass
 
@@ -7457,23 +7498,3 @@ class UltronUI:
     def show_toast(self, message: str, level: str = "info", duration_ms: int = 4000):
         """Thread-safe: show a toast notification via the underlying MainWindow."""
         self._win.show_toast(message, level=level, duration_ms=duration_ms)
-
-    # ── keyboard shortcuts (discoverability) ───────────────────────────────
-    def keyPressEvent(self, event):
-        from PyQt6.QtGui import QKeySequence
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            if event.key() == Qt.Key.Key_Slash:
-                # Ctrl+/ → show keyboard shortcuts help
-                dlg = keyboard_shortcuts_dialog(self)
-                dlg.exec()
-                return
-            if event.key() == Qt.Key.Key_K:
-                # Ctrl+K → focus the composer
-                self._input.setFocus()
-                return
-        if event.key() == Qt.Key.Key_Escape:
-            # Esc → close any open overlay
-            if self._overlay and self._overlay.isVisible():
-                self._overlay.hide()
-                return
-        super().keyPressEvent(event)
