@@ -12,6 +12,8 @@ Auto-discovered by core/action_loader.py.
 from __future__ import annotations
 
 import ctypes
+import datetime as _dt
+import hashlib
 import json
 import os
 import platform
@@ -31,6 +33,13 @@ _OS = platform.system()
 _WIN_HIDE: dict = {"creationflags": subprocess.CREATE_NO_WINDOW} if _OS == "Windows" else {}
 _BASE_DIR = Path(__file__).resolve().parent.parent
 _PROTOCOLS_FILE = _BASE_DIR / "memory" / "protocols.json"
+_AUDIT_DIR = _BASE_DIR / "logs"
+_AUDIT_FILE = _AUDIT_DIR / "command_audit.log"
+
+from core import confirm as confirm_gate
+
+# Built-in protocols that perform irreversible or system-wide changes.
+_DESTRUCTIVE_PROTOCOLS = {"lockdown", "stealth", "night", "sleep", "gaming", "boost"}
 
 
 def _load_custom_protocols() -> dict[str, dict]:
@@ -236,12 +245,8 @@ def list_all_protocols() -> str:
     return "\n".join(lines)
 
 
-def run_protocol(name: str, player=None) -> str:
-    """Execute a built-in or custom protocol by name."""
-    clean = (name or "").lower().strip().replace("protocol", "").strip()
-    if not clean:
-        return "No protocol name specified. Call list_all_protocols or specify a protocol name."
-
+def _run_protocol_direct(clean: str, player=None) -> str:
+    """Execute a protocol directly (called after confirmation, if needed)."""
     # 1. Check built-in
     if clean in _BUILTIN_PROTOCOLS:
         _, handler = _BUILTIN_PROTOCOLS[clean]
@@ -265,6 +270,56 @@ def run_protocol(name: str, player=None) -> str:
         return f"{msg} (Launched: {', '.join(apps) if apps else 'configured tasks'})"
 
     return f"Protocol '{clean}' not found in registry. Say 'list protocols' to view available protocols."
+
+
+def run_protocol(name: str, player=None) -> str:
+    """Execute a built-in or custom protocol by name.
+
+    Destructive built-ins (lockdown, night, gaming, boost) and any custom
+    protocol with a shell command are parked behind the confirmation gate.
+    """
+    clean = (name or "").lower().strip().replace("protocol", "").strip()
+    if not clean:
+        return "No protocol name specified. Call list_all_protocols or specify a protocol name."
+
+    # Custom protocols with a shell command run arbitrary code — always confirm.
+    customs = _load_custom_protocols()
+    has_custom_cmd = clean in customs and bool(customs[clean].get("command"))
+    is_destructive = clean in _DESTRUCTIVE_PROTOCOLS or has_custom_cmd
+
+    if is_destructive:
+        def _run_confirmed() -> None:
+            result = _run_protocol_direct(clean, player=player)
+            _audit_log_protocol(clean, result)
+
+        confirm_key = f"macro_protocol:{hashlib.sha256(clean.encode()).hexdigest()[:12]}"
+        return confirm_gate.request(
+            key=confirm_key,
+            title=f"Execute protocol '{clean}'",
+            detail=(
+                f"Protocol '{clean}' performs system-wide or irreversible changes. "
+                "Confirm to proceed."
+            ),
+            run=_run_confirmed,
+        )
+
+    return _run_protocol_direct(clean, player=player)
+
+
+def _audit_log_protocol(protocol_name: str, result: str) -> None:
+    """Append a protocol execution record to the command audit trail. Never raises."""
+    try:
+        record = {
+            "when": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "os": _OS,
+            "action": f"protocol:{protocol_name}",
+            "result": (result or "")[:500],
+        }
+        _AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_AUDIT_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def create_custom_protocol(name: str, description: str = "", apps: list[str] | None = None, command: str = "", response_msg: str = "") -> str:

@@ -38,14 +38,13 @@ def start_countdown_timer(seconds: int, message: str = "", speak_cb=None, player
 
 
 def quick_timer_handler(parameters: dict, speak=None, player=None, **kwargs) -> str:
-    action = str(parameters.get("action", "timer")).lower().strip()
     seconds = parameters.get("seconds") or 0
     minutes = parameters.get("minutes") or 0
     message = parameters.get("message", "Timer finished")
 
     total_secs = int(seconds) + int(minutes) * 60
     if total_secs <= 0:
-        total_secs = 60  # Default 1 minute
+        total_secs = 60  # Default 1 minute when no duration given
 
     return start_countdown_timer(total_secs, message=message, speak_cb=speak, player_cb=player)
 

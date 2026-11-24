@@ -1,5 +1,5 @@
 """
-Local wake-word detection for JARVIS ("Hey Jarvis").
+Local wake-word detection for ULTRON ("Hey Ultron" — see naming note below).
 
 Design goals:
   • ZERO cost when the feature is off — openwakeword is imported ONLY inside
@@ -12,8 +12,14 @@ Design goals:
   • Fully local & offline — audio fed here never leaves the machine; there is no
     network call except the one-time model download the user triggers from the UI.
 
-openwakeword ships small ONNX models (a few MB each) and runs comfortably on a
-CPU. The pretrained wake phrase used here is "Hey Jarvis".
+NAMING HONESTY
+  openwakeword ships only a small set of pretrained ONNX models, and the one
+  used here is named "hey_jarvis". It responds to the spoken phrase "hey jarvis",
+  not "hey ultron". There is no third-party "hey_ultron" model available, so
+  WAKE_MODEL = "hey_jarvis" is preserved as-is and the model filename is never
+  changed. The UI labels this detector "Hey Ultron", but the audio trigger phrase
+  is "hey jarvis". Users who say "Hey Ultron" will NOT wake the assistant until
+  a compatible "hey_ultron" model exists or a custom model is trained.
 """
 from __future__ import annotations
 
@@ -24,7 +30,8 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-# Pretrained openwakeword model that listens for "Hey Jarvis".
+# Pretrained openwakeword model ("hey_jarvis") — third-party model; it
+# listens for the "hey jarvis" audio phrase. UI labels it "Hey Ultron".
 WAKE_MODEL = "hey_jarvis"
 # Score in [0,1]; above this counts as a detection. Tunable per environment.
 DEFAULT_THRESHOLD = 0.5
@@ -146,7 +153,7 @@ class WakeWordDetector:
         self._ready = True
         self._thread = threading.Thread(target=self._loop, daemon=True, name="WakeWordThread")
         self._thread.start()
-        self._logger("Wake word: listening for 'Hey Jarvis'.")
+        self._logger("Wake word: listening for 'Hey Ultron'.")
         return True
 
     def stop(self) -> None:
@@ -187,9 +194,9 @@ class WakeWordDetector:
                 scores = self._model.predict(np.asarray(frame, dtype=np.int16))
                 score = 0.0
                 if isinstance(scores, dict):
-                    # match the jarvis model regardless of exact key suffix
+                    # match the ultron model regardless of exact key suffix
                     for k, v in scores.items():
-                        if "jarvis" in k.lower():
+                        if "ultron" in k.lower():
                             score = max(score, float(v))
                     if score == 0.0 and scores:
                         score = max(float(v) for v in scores.values())

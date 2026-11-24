@@ -12,6 +12,7 @@ config/whatsapp_web/
 memory/long_term.json
 memory/*.db
 memory/drone_reports/
+memory/boss_biometrics/
 
 # ── Python Build & Cache ───────────────────────────────────────────
 __pycache__/

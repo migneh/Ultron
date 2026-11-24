@@ -40,19 +40,19 @@ playwright>=1.40,<2
 yt-dlp
 
 # ── Automation / input control ────────────────────────────────────────────────
-pyautogui
-pyperclip
+pyautogui>=0.9,<1
+pyperclip>=1.8,<2
 
 # ── Vision & media ────────────────────────────────────────────────────────────
 pillow>=10,<13
 opencv-python>=4.8,<5
 mss>=9,<11
-pytesseract                  # optical_hud — local optical character recognition (OCR)
+pytesseract>=0.3,<1          # optical_hud — local optical character recognition (OCR)
 
 # ── System, files & documents ─────────────────────────────────────────────────
 psutil>=5.9,<8
-send2trash                   # file_controller — recoverable deletes
-python-pptx                  # file_processor — presentation reading
+send2trash>=1.8,<2           # file_controller — recoverable deletes
+python-pptx>=1.0,<2          # file_processor — presentation reading
 
 # ── Remote dashboard (control from your phone) ────────────────────────────────
 fastapi>=0.110,<1

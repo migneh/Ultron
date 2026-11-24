@@ -381,7 +381,7 @@ def search_memory(query: str, limit: int = 8) -> str:
 
 
 def all_entries_for_ui() -> list[dict]:
-    """Flat list for the memory panel: what JARVIS knows, and when it learned it.
+    """Flat list for the memory panel: what ULTRON knows, and when it learned it.
     Sorted newest first so the panel opens on what changed most recently."""
     memory = load_memory()
     rows = []
@@ -407,6 +407,195 @@ def remember(key: str, value: str, category: str = "notes") -> str:
         category = "notes"
     update_memory({category: {key: {"value": value}}})
     return f"Remembered: {category}/{key} = {value}"
+
+
+# ── Automatic memory extraction ──────────────────────────────────────────────
+# Ultron used to rely entirely on the model deciding to call save_memory.
+# That is passive and unreliable — the model forgets, hesitates, or simply
+# never calls it.  This extracts personal facts directly from the Boss's
+# utterances and saves them automatically, so Ultron actually remembers across
+# sessions.  Existing keys are never overwritten (the Boss's own save_memory
+# calls take precedence).
+
+import re as _re
+
+# Simple, robust extraction patterns.  Each trigger phrase captures the
+# trailing text up to a sentence boundary; the caller trims and validates.
+# No fragile Unicode character classes — just capture and sanitize.
+
+_NAME_TRIGGERS = [
+    _re.compile(r"\bmy name is\s+(.+?)(?:\.|,|!|$|\s+(?:and|but|or|with|in|at|from)\b)", _re.I),
+    _re.compile(r"\bi am\s+([A-Z][a-zA-ZÀ-ÖØ-öø-ÿ' -]+?)(?:\.|,|!|$|\s+(?:and|but|or|with|in|at|from|a|an|the)\b)", _re.I),
+    _re.compile(r"\bcall me\s+(.+?)(?:\.|,|!|$|\s+(?:and|but|or)\b)", _re.I),
+    _re.compile(r"\bi['’]m\s+([A-Z][a-zA-ZÀ-ÖØ-öø-ÿ' -]+?)(?:\.|,|!|$|\s+(?:and|but|or|with|in|at|from|a|an|the)\b)", _re.I),
+]
+
+_CITY_TRIGGERS = [
+    _re.compile(r"\bi live in\s+(.+?)(?:\.|,|!|$|\s+(?:and|but|or|with|at|from)\b)", _re.I),
+    _re.compile(r"\bi['’]m from\s+(.+?)(?:\.|,|!|$|\s+(?:and|but|or)\b)", _re.I),
+    _re.compile(r"\bi am from\s+(.+?)(?:\.|,|!|$|\s+(?:and|but|or)\b)", _re.I),
+    _re.compile(r"\bbased in\s+(.+?)(?:\.|,|!|$)", _re.I),
+    _re.compile(r"\blocated in\s+(.+?)(?:\.|,|!|$)", _re.I),
+]
+
+_JOB_TRIGGERS = [
+    _re.compile(r"\bi work (?:at|for)\s+(.+?)(?:\.|,|!|$|\s+(?:and|but|or|with|in|from)\b)", _re.I),
+    _re.compile(r"\bmy job is\s+(.+?)(?:\.|,|!|$)", _re.I),
+    _re.compile(r"\bi['’]m a(?:n)?\s+(.+?)(?:\.|,|!|$|\s+(?:and|but|or)\b)", _re.I),
+    _re.compile(r"\bi work as\s+(.+?)(?:\.|,|!|$)", _re.I),
+]
+
+_LANG_TRIGGERS = [
+    _re.compile(r"\bi speak\s+([a-zA-ZÀ-ÖØ-öø-ÿ]{2,30})\b", _re.I),
+    _re.compile(r"\bmy language is\s+([a-zA-ZÀ-ÖØ-öø-ÿ]{2,30})\b", _re.I),
+]
+
+_PREF_TRIGGERS = [
+    _re.compile(r"\bi (?:like|love|enjoy)\s+(.+?)(?:\.|,|!|$|\s+(?:and|but|or)\b)", _re.I),
+    _re.compile(r"\bmy favorite\s+(.+?)\s+is\s+(.+?)(?:\.|,|!|$)", _re.I),
+]
+
+_PROJECT_TRIGGERS = [
+    _re.compile(r"\bi['’]m (?:building|working on|making|creating)\s+(.+?)(?:\.|,|!|$|\s+(?:and|but|or)\b)", _re.I),
+    _re.compile(r"\bi am (?:building|working on|making|creating)\s+(.+?)(?:\.|,|!|$|\s+(?:and|but|or)\b)", _re.I),
+    _re.compile(r"\bmy project is\s+(.+?)(?:\.|,|!|$)", _re.I),
+    _re.compile(r"\bmy project\s+(.+?)(?:\.|,|!|$)", _re.I),
+]
+
+
+def _clean_value(raw: str) -> str:
+    """Strip whitespace, trailing punctuation, and stop-words from a capture.
+
+    Stop-words are only removed when they form a whole trailing word, so
+    "color" is not mangled into "col".
+    """
+    v = raw.strip().strip(".,!?;:").strip()
+    for stop in ("and", "but", "or", "with", "in", "at", "from", "a", "an", "the"):
+        if v.lower() == stop:
+            v = ""
+            break
+        if v.lower().endswith(" " + stop):
+            v = v[: -(len(stop) + 1)].strip()
+    return v.strip()
+
+
+def _looks_like_name(v: str) -> bool:
+    """A name starts with a capital letter and has at least 2 letters."""
+    v = v.strip()
+    if len(v) < 2:
+        return False
+    if not v[0].isupper():
+        return False
+    return any(c.isalpha() for c in v)
+
+
+def _save_if_new(category: str, key: str, value: str) -> bool:
+    """Save a fact only if that key does not already exist. Returns True if saved."""
+    memory = load_memory()
+    cat = memory.get(category, {})
+    if not isinstance(cat, dict):
+        cat = {}
+    if key in cat and cat[key]:
+        return False  # already known — don't overwrite the Boss's data
+    update_memory({category: {key: {"value": value}}})
+    return True
+
+
+def _save_if_new(category: str, key: str, value: str) -> bool:
+    """Save a fact only if that key does not already exist. Returns True if saved."""
+    memory = load_memory()
+    cat = memory.get(category, {})
+    if not isinstance(cat, dict):
+        cat = {}
+    if key in cat and cat[key]:
+        return False  # already known — don't overwrite the Boss's data
+    update_memory({category: {key: {"value": value}}})
+    return True
+
+
+def extract_and_save_memory(text: str, user_name: str | None = None) -> list[str]:
+    """
+    Scan a user utterance for memory-worthy personal facts and save them
+    automatically.  Returns a list of human-readable save confirmations.
+
+    This runs after every user turn so Ultron actually remembers the Boss
+    across sessions instead of hoping the model calls save_memory.
+    """
+    if not text or not text.strip():
+        return []
+
+    saved: list[str] = []
+
+    # ── Name ──
+    for pat in _NAME_TRIGGERS:
+        m = pat.search(text)
+        if m:
+            name = _clean_value(m.group(1))
+            if _looks_like_name(name):
+                if user_name and name.lower() == user_name.lower():
+                    break
+                if _save_if_new("identity", "name", name):
+                    saved.append(f"identity/name = {name}")
+            break
+
+    # ── City / location ──
+    for pat in _CITY_TRIGGERS:
+        m = pat.search(text)
+        if m:
+            city = _clean_value(m.group(1))
+            if city and _looks_like_name(city):
+                if _save_if_new("identity", "city", city):
+                    saved.append(f"identity/city = {city}")
+            break
+
+    # ── Job / occupation ──
+    for pat in _JOB_TRIGGERS:
+        m = pat.search(text)
+        if m:
+            job = _clean_value(m.group(1))
+            if job:
+                if _save_if_new("identity", "job", job):
+                    saved.append(f"identity/job = {job}")
+            break
+
+    # ── Language ──
+    for pat in _LANG_TRIGGERS:
+        m = pat.search(text)
+        if m:
+            lang = m.group(1).strip()
+            if lang:
+                if _save_if_new("identity", "language", lang):
+                    saved.append(f"identity/language = {lang}")
+            break
+
+    # ── Preferences (simple "I like X") ──
+    for pat in _PREF_TRIGGERS:
+        m = pat.search(text)
+        if m:
+            if m.lastindex and m.lastindex >= 2:
+                # "my favorite X is Y" -> key = favorite_X, value = Y
+                key = f"favorite_{_clean_value(m.group(1)).strip().lower().replace(' ', '_')}"
+                val = _clean_value(m.group(2))
+            else:
+                key = f"likes_{_clean_value(m.group(1)).strip().lower().replace(' ', '_')}"
+                val = "true"
+            if key and val:
+                if _save_if_new("preferences", key, val):
+                    saved.append(f"preferences/{key} = {val}")
+            break
+
+    # ── Projects ──
+    for pat in _PROJECT_TRIGGERS:
+        m = pat.search(text)
+        if m:
+            proj = _clean_value(m.group(1))
+            if proj:
+                key = proj.strip().lower().replace(' ', '_').replace('-', '_')
+                if _save_if_new("projects", key, proj):
+                    saved.append(f"projects/{key} = {proj}")
+            break
+
+    return saved
 
 
 def forget(key: str, category: str = "notes") -> str:

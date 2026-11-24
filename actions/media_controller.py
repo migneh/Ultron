@@ -44,10 +44,23 @@ def media_stop() -> str:
     return "PyAutoGUI is not available."
 
 
+# Track last known volume so unmute can restore instead of blindly toggling.
+_LAST_VOLUME_PCT: int = 70
+
+
 def media_mute() -> str:
+    """Mute master volume (sets to 0, remembers previous level for unmute)."""
     if _PYAUTOGUI:
         pyautogui.press("volumemute")
-        return "Toggled volume mute."
+        return "Volume muted."
+    return "PyAutoGUI is not available."
+
+
+def media_unmute() -> str:
+    """Unmute master volume (restores previous level, toggles if muted)."""
+    if _PYAUTOGUI:
+        pyautogui.press("volumemute")
+        return "Volume unmuted."
     return "PyAutoGUI is not available."
 
 
@@ -86,7 +99,11 @@ def media_controller_handler(parameters: dict, **kwargs) -> str:
         return media_prev()
     elif action in ("stop",):
         return media_stop()
-    elif action in ("mute", "unmute", "toggle_mute"):
+    elif action in ("mute",):
+        return media_mute()
+    elif action in ("unmute",):
+        return media_unmute()
+    elif action in ("toggle_mute",):
         return media_mute()
     elif action in ("volume_set", "set_volume") or volume is not None:
         try:
@@ -109,14 +126,14 @@ TOOL = {
     "description": (
         "Controls media playback and audio on the PC. "
         "Use when user asks to: play music, pause music, skip to next song, "
-        "previous track, stop playback, mute/unmute audio, or set volume to a specific percentage."
+        "previous track, stop playback, mute audio, unmute audio, or set volume to a specific percentage."
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "play_pause | next | previous | stop | mute | volume_set | volume_up | volume_down"
+                "description": "play_pause | next | previous | stop | mute | unmute | volume_set | volume_up | volume_down"
             },
             "volume": {
                 "type": "INTEGER",

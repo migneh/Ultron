@@ -69,6 +69,9 @@ def _get_gemini_key() -> str | None:
 _KEY_CHARS = [c for c in (string.ascii_uppercase + string.digits)
               if c not in ('O', 'I', 'L', '0', '1')]
 
+# Auth tokens expire so a compromised phone cannot keep access indefinitely.
+TOKEN_TTL_SECONDS = 24 * 60 * 60  # 24 hours
+
 # ── AES-256-CBC ───────────────────────────────────────────────────────────────
 _AES_SALT = b'ULTRON-DASHBOARD-v1'
 
@@ -377,9 +380,9 @@ def _ensure_certs() -> bool:
     key_p = certs / "ultron.key"
     crt_p = certs / "ultron.crt"
     if not (key_p.exists() and crt_p.exists()):
-        if (certs / "jarvis.key").exists() and (certs / "jarvis.crt").exists():
-            key_p = certs / "jarvis.key"
-            crt_p = certs / "jarvis.crt"
+        if (certs / "ultron.key").exists() and (certs / "ultron.crt").exists():
+            key_p = certs / "ultron.key"
+            crt_p = certs / "ultron.crt"
     if key_p.exists() and crt_p.exists():
         return True
 
@@ -487,7 +490,7 @@ class DashboardServer:
         global _GLOBAL_DASHBOARD
         _GLOBAL_DASHBOARD = self
         self._ip                          = _local_ip()
-        self._tokens: set[str]            = set()
+        self._tokens: dict[str, float]    = {}   # auth_token -> expiry timestamp
         self._token_keys: dict[str, str]  = {}   # auth_token → session_key
         self._aes_cache:  dict[str, bytes]= {}   # session_key → AES bytes
         self._clients: set[WebSocket]     = set()
@@ -516,7 +519,7 @@ class DashboardServer:
     def _ssl_enabled() -> bool:
         certs = BASE_DIR / "config" / "certs"
         return ((certs / "ultron.key").exists() and (certs / "ultron.crt").exists()) or \
-               ((certs / "jarvis.key").exists() and (certs / "jarvis.crt").exists())
+               ((certs / "ultron.key").exists() and (certs / "ultron.crt").exists())
 
     def get_url(self) -> str:
         proto = "https" if self._ssl_enabled() else "http"
@@ -595,7 +598,12 @@ class DashboardServer:
 
         def _auth(req: Request) -> bool:
             tok = req.headers.get("authorization", "").removeprefix("Bearer ").strip()
-            return bool(tok) and tok in self._tokens
+            exp = self._tokens.get(tok)
+            if not exp or time.time() > exp:
+                self._tokens.pop(tok, None)
+                self._token_keys.pop(tok, None)
+                return False
+            return True
 
         # serve avatar image for mobile UI
         @app.get("/avatar.png")
@@ -687,7 +695,7 @@ class DashboardServer:
             if entered in self._pending_keys and self._pending_keys[entered] > now:
                 del self._pending_keys[entered]          # one-time use
                 tok = secrets.token_urlsafe(32)
-                self._tokens.add(tok)
+                self._tokens[tok] = time.time() + TOKEN_TTL_SECONDS
                 self._token_keys[tok] = entered
                 self._aes_key(entered)                   # pre-derive & cache
                 if self._connect_callback:
@@ -719,7 +727,7 @@ class DashboardServer:
             del self._pending_keys[key]
             tok     = secrets.token_urlsafe(32)
             dev_tok = secrets.token_urlsafe(32)
-            self._tokens.add(tok)
+            self._tokens[tok] = time.time() + TOKEN_TTL_SECONDS
             self._token_keys[tok] = key
             self._aes_key(key)
             self._device_sessions[dev_tok] = {"session_key": key}
@@ -771,9 +779,9 @@ class DashboardServer:
   sessionStorage.setItem('ultron_token','{tok}');
   sessionStorage.setItem('ultron_key','{key}');
   localStorage.setItem('ultron_device_token','{dev_tok}');
-  sessionStorage.setItem('jarvis_token','{tok}');
-  sessionStorage.setItem('jarvis_key','{key}');
-  localStorage.setItem('jarvis_device_token','{dev_tok}');
+  sessionStorage.setItem('ultron_token','{tok}');
+  sessionStorage.setItem('ultron_key','{key}');
+  localStorage.setItem('ultron_device_token','{dev_tok}');
   setTimeout(function(){{location.replace('/')}}, 350);
 </script>
 </body></html>""")
@@ -790,7 +798,7 @@ class DashboardServer:
                 return JSONResponse({"ok": False}, status_code=401)
             session_key = self._device_sessions[dev_tok]["session_key"]
             tok = secrets.token_urlsafe(32)
-            self._tokens.add(tok)
+            self._tokens[tok] = time.time() + TOKEN_TTL_SECONDS
             self._token_keys[tok] = session_key
             self._aes_key(session_key)
             if self._connect_callback:
@@ -1168,8 +1176,8 @@ class DashboardServer:
         Chrome HTTPS-upgrades any bare IP:PORT the user types, so this port also needs TLS.
         User types IP:8001 → Chrome tries https → self-signed cert warning → accept once → done."""
         certs = BASE_DIR / "config" / "certs"
-        ssl_key  = certs / "ultron.key" if (certs / "ultron.key").exists() else certs / "jarvis.key"
-        ssl_cert = certs / "ultron.crt" if (certs / "ultron.crt").exists() else certs / "jarvis.crt"
+        ssl_key  = certs / "ultron.key" if (certs / "ultron.key").exists() else certs / "ultron.key"
+        ssl_cert = certs / "ultron.crt" if (certs / "ultron.crt").exists() else certs / "ultron.crt"
         asyncio.get_event_loop().run_in_executor(None, _ensure_network_access, PORT + 1)
         cfg = uvicorn.Config(
             self.app, host="0.0.0.0", port=PORT + 1, log_level="warning",
@@ -1196,8 +1204,8 @@ class DashboardServer:
 
         use_ssl  = self._ssl_enabled()
         certs    = BASE_DIR / "config" / "certs"
-        ssl_key  = certs / "ultron.key" if (certs / "ultron.key").exists() else certs / "jarvis.key"
-        ssl_cert = certs / "ultron.crt" if (certs / "ultron.crt").exists() else certs / "jarvis.crt"
+        ssl_key  = certs / "ultron.key" if (certs / "ultron.key").exists() else certs / "ultron.key"
+        ssl_cert = certs / "ultron.crt" if (certs / "ultron.crt").exists() else certs / "ultron.crt"
 
         if use_ssl:
             asyncio.create_task(self._serve_alias())

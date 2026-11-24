@@ -3,10 +3,16 @@ actions/purge_protocol.py — Deep Disk & Cache Purge Protocol for Ultron AI.
 Safely scans and purges temporary files, application caches, crash dumps,
 developer build artifacts (pip, pytest, pycache), and empties the Recycle Bin.
 Auto-discovered by core/action_loader.py.
+
+Security (P0): irreversible purge actions are parked behind the on-screen
+confirmation gate (core/confirm.py) and only run after the user presses CONFIRM.
 """
 from __future__ import annotations
 
 import ctypes
+import datetime as _dt
+import hashlib
+import json
 import os
 import platform
 import shutil
@@ -16,9 +22,15 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from core import confirm as confirm_gate
+
 _OS = platform.system()
 _WIN_HIDE: dict = {"creationflags": subprocess.CREATE_NO_WINDOW} if _OS == "Windows" else {}
 _BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Audit trail for purge operations (same log as system_command).
+_AUDIT_DIR = _BASE_DIR / "logs"
+_AUDIT_FILE = _AUDIT_DIR / "command_audit.log"
 
 # Don't touch files created/modified in the last 15 minutes (safety guard for active installers)
 _SAFETY_MARGIN_SECONDS = 900
@@ -266,6 +278,23 @@ def execute_purge(include_recycle_bin: bool = True, include_dev: bool = True) ->
     return "\n".join(lines)
 
 
+def _audit_log_purge(action: str, recycle_bin: bool, dev: bool, result: str) -> None:
+    """Append a purge action record to the command audit trail. Never raises."""
+    try:
+        record = {
+            "when": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "os": _OS,
+            "action": action,
+            "recycle_bin": recycle_bin,
+            "dev_caches": dev,
+            "result": (result or "")[:500],
+        }
+        with open(_AUDIT_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def purge_protocol(parameters: dict, player=None, **kwargs) -> str:
     """Main handler for purge_protocol tool."""
     action = (parameters.get("action") or "scan").lower().strip()
@@ -280,19 +309,56 @@ def purge_protocol(parameters: dict, player=None, **kwargs) -> str:
         if action in ("scan", "audit", "check", "inspect", "preview"):
             return scan_purge_targets()
 
+        # Irreversible purge actions go through the confirmation gate.
         elif action in ("purge", "purge_all", "clean", "clean_all", "execute"):
             include_rb = bool(parameters.get("recycle_bin", True))
             include_dev = bool(parameters.get("dev_caches", True))
-            return execute_purge(include_recycle_bin=include_rb, include_dev=include_dev)
+
+            def _run_purge() -> str:
+                result = execute_purge(include_recycle_bin=include_rb, include_dev=include_dev)
+                _audit_log_purge(action, include_rb, include_dev, result)
+                return result
+
+            confirm_key = f"purge_protocol:{hashlib.sha256(str(parameters).encode()).hexdigest()[:16]}"
+            return confirm_gate.request(
+                key=confirm_key,
+                title="Execute system purge",
+                detail=(
+                    f"Purge will delete temp files, caches, crash dumps, "
+                    f"{'and empty the Recycle Bin' if include_rb else ''}"
+                    f"{' and clean developer caches' if include_dev else ''}. "
+                    "This cannot be undone."
+                ),
+                run=_run_purge,
+            )
 
         elif action in ("dev", "dev_cache", "pip", "pycache"):
-            b, c, logs = _clean_dev_caches()
-            out = ["Developer caches purged:"] + [f"• {l}" for l in logs]
-            out.append(f"Total space freed: {b / (1024*1024):.1f} MB ({c} files).")
-            return "\n".join(out)
+            def _run_dev() -> str:
+                b, c, logs = _clean_dev_caches()
+                _audit_log_purge(action, False, True, f"{b} bytes, {c} files")
+                return f"{b} bytes, {c} files"
+
+            confirm_key = f"purge_protocol:dev:{hashlib.sha256(str(parameters).encode()).hexdigest()[:12]}"
+            return confirm_gate.request(
+                key=confirm_key,
+                title="Clean developer caches",
+                detail="Purge pip cache and Python __pycache__ folders. This cannot be undone.",
+                run=_run_dev,
+            )
 
         elif action in ("recycle_bin", "trash", "empty_trash"):
-            return _empty_recycle_bin()
+            def _run_rb() -> str:
+                result = _empty_recycle_bin()
+                _audit_log_purge(action, True, False, result)
+                return result
+
+            confirm_key = f"purge_protocol:recycle:{hashlib.sha256(str(parameters).encode()).hexdigest()[:12]}"
+            return confirm_gate.request(
+                key=confirm_key,
+                title="Empty Recycle Bin",
+                detail="Permanently empty the Windows Recycle Bin. Items cannot be recovered.",
+                run=_run_rb,
+            )
 
         else:
             return f"Unknown purge action '{action}'. Available: scan, purge, dev, recycle_bin."
