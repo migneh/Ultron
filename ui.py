@@ -61,6 +61,16 @@ try:
 except Exception:
     UltronAvatar = None
 
+# ── Ultron design system ────────────────────────────────────────────────────
+from core.ui_design import (
+    TYPE_CAPTION, TYPE_SMALL, TYPE_BODY, TYPE_MEDIUM, TYPE_HEADING, TYPE_DISPLAY,
+    SPACE_XS, SPACE_SM, SPACE_MD, SPACE_LG, SPACE_XL, SPACE_2XL,
+    font, primary_button, secondary_button, ghost_button, danger_button,
+    style_input, style_combo, glass_panel, glass_card, toast,
+    apply_focus_ring, contrast_ratio, _colors,
+    AIStatusBadge, GestureStatusBadge, suggestion_row, keyboard_shortcuts_dialog, accessibility_panel,
+)
+
 try:
     from core.avatar import HoloAvatar
 except Exception:      # pragma: no cover — HUD must never die over cosmetics
@@ -1102,14 +1112,15 @@ class LogWidget(QTextEdit):
         # without bound — keeps memory flat and every insert cheap. Oldest
         # lines drop off the top automatically.
         self.document().setMaximumBlockCount(600)
-        self.setFont(QFont("Consolas", 9))
+        self.setFont(font(TYPE_BODY))
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(f"""
             QTextEdit {{
-                background: {C.PANEL};
+                background: rgba(18, 21, 31, 180);
                 color: {C.TEXT};
-                border: 1px solid {C.BORDER};
-                border-radius: 4px;
-                padding: 6px;
+                border: 1px solid {C.BORDER_B};
+                border-radius: 8px;
+                padding: {SPACE_SM}px;
                 selection-background-color: {C.PRI_GHO};
             }}
             QScrollBar:vertical {{
@@ -1230,6 +1241,15 @@ class FileDropZone(QWidget):
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(100)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        c = _colors()
+        self.setStyleSheet(f"""
+            QWidget {{
+                background: rgba(18, 21, 31, 160);
+                border: 2px dashed {c['BORDER_B']};
+                border-radius: 8px;
+            }}
+        """)
         self._current_file: str | None = None
         self._hovering  = False
         self._drag_over = False
@@ -2162,6 +2182,10 @@ class CustomizeOverlay(QWidget):
         self._hex_input.textEdited.connect(self._on_hex_edited)
         lay.addWidget(self._hex_input)
 
+        # ── accessibility ────────────────────────────────────────────────────
+        self._acc_panel = accessibility_panel(self, self._on_accessibility_change)
+        lay.addWidget(self._acc_panel)
+
         lay.addSpacing(6)
         btn_row = QHBoxLayout(); btn_row.setSpacing(8)
 
@@ -2305,6 +2329,13 @@ class CustomizeOverlay(QWidget):
         save_voice_rate(getattr(self, "_sel_rate", "+15%"))
         self.saved.emit(name, user, self._sel_color or DEFAULT_UI_COLOR, self._sel_voice)
         self.hide()
+
+    def _on_accessibility_change(self, key: str, value):
+        """Handle accessibility toggle changes (reduced motion, high contrast, font scale)."""
+        # Stored on the overlay; MainWindow can read these to adjust rendering.
+        if not hasattr(self, "_acc_settings"):
+            self._acc_settings = {}
+        self._acc_settings[key] = value
 
     def hideEvent(self, e):
         p = self.parentWidget()
@@ -2946,7 +2977,13 @@ class MemoryOverlay(_HudOverlay):
         before = self.geometry()
         self._clear_layout()
 
-        from memory.memory_manager import all_entries_for_ui
+        from memory.memory_manager import (
+            all_entries_for_ui, get_pending_review, confirm_pending,
+            dismiss_pending, edit_memory, _entry_confidence, _entry_source,
+            CONF_HIGH, get_graph_relationships,
+            feedback_helpful, feedback_not_helpful, feedback_correct,
+            get_followup_suggestions, export_memories, import_memories,
+        )
 
         hdr = QLabel("🧠  WHAT ULTRON REMEMBERS")
         hdr.setFont(QFont("Courier New", 12, QFont.Weight.Bold))
@@ -2966,6 +3003,133 @@ class MemoryOverlay(_HudOverlay):
         cap.setFont(QFont("Courier New", 7))
         cap.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
         self._lay.addWidget(cap)
+
+        # ── Pending review section — low-confidence extractions awaiting user ──
+        pending = get_pending_review()
+        if pending:
+            pend_hdr = QLabel(f"⏳  {len(pending)} awaiting your review")
+            pend_hdr.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+            pend_hdr.setStyleSheet(f"color: {C.ACC2}; background: transparent; letter-spacing: 0.5px;")
+            self._lay.addWidget(pend_hdr)
+
+            pend_scroll = QScrollArea()
+            pend_scroll.setWidgetResizable(True)
+            pend_scroll.setFixedHeight(min(200, 34 * len(pending) + 10))
+            pend_scroll.setStyleSheet(
+                f"QScrollArea {{ border: 1px solid {C.BORDER}; border-radius: 3px; "
+                f"background: rgba(255, 255, 255, 0.03); }}\""
+            )
+            pend_inner = QWidget()
+            pend_lay = QVBoxLayout(pend_inner)
+            pend_lay.setContentsMargins(6, 6, 6, 6)
+            pend_lay.setSpacing(3)
+
+            for p in pending:
+                prow = QHBoxLayout(); prow.setSpacing(6)
+                pkey = QLabel(f"<b>{p['key'].replace('_', ' ')}</b>")
+                pkey.setFont(QFont("Courier New", 8))
+                pkey.setStyleSheet(f"color: {C.TEXT}; background: transparent;")
+                prow.addWidget(pkey, 1)
+
+                pval = QLabel(f"<span style='color:{C.TEXT_MED}'>— {p['value']}</span>")
+                pval.setFont(QFont("Courier New", 8))
+                pval.setStyleSheet(f"color: {C.TEXT}; background: transparent;")
+                prow.addWidget(pval, 1)
+
+                pconf = QLabel(p["confidence"].upper())
+                pconf.setFixedWidth(44)
+                pconf.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+                conf_color = {"high": C.GREEN, "medium": C.ACC2, "low": C.RED}.get(
+                    p["confidence"], C.TEXT_DIM)
+                pconf.setStyleSheet(f"color: {conf_color}; background: transparent;")
+                prow.addWidget(pconf)
+
+                psrc = QLabel(f"«{p['source']}»" if p.get("source") else "—")
+                psrc.setFont(QFont("Courier New", 7))
+                psrc.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+                psrc.setWordWrap(True)
+                prow.addWidget(psrc, 1)
+
+                pbtn_ok = QPushButton("✓")
+                pbtn_ok.setFixedSize(18, 18)
+                pbtn_ok.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+                pbtn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
+                pbtn_ok.setToolTip("Confirm & save")
+                pbtn_ok.setStyleSheet(f"""
+                    QPushButton {{ background: transparent; color: {C.GREEN};
+                        border: 1px solid {C.GREEN}; border-radius: 2px; }}
+                    QPushButton:hover {{ background: {C.GREEN}; color: #000000; }}
+                """)
+                pbtn_ok.clicked.connect(
+                    lambda _=False, k=p["key"]: self._confirm_pending(k))
+                prow.addWidget(pbtn_ok)
+
+                pbtn_no = QPushButton("✕")
+                pbtn_no.setFixedSize(18, 18)
+                pbtn_no.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+                pbtn_no.setCursor(Qt.CursorShape.PointingHandCursor)
+                pbtn_no.setToolTip("Dismiss")
+                pbtn_no.setStyleSheet(f"""
+                    QPushButton {{ background: transparent; color: {C.TEXT_DIM};
+                        border: 1px solid {C.BORDER}; border-radius: 2px; }}
+                    QPushButton:hover {{ color: {C.RED}; border-color: {C.RED}; }}
+                """)
+                pbtn_no.clicked.connect(
+                    lambda _=False, k=p["key"]: self._dismiss_pending(k))
+                prow.addWidget(pbtn_no)
+
+                pholder = QWidget()
+                pholder.setLayout(prow)
+                pend_lay.addWidget(pholder)
+
+            pend_lay.addStretch()
+            pend_scroll.setWidget(pend_inner)
+            self._lay.addWidget(pend_scroll)
+
+            pend_sep = QFrame(); pend_sep.setFrameShape(QFrame.Shape.HLine)
+            pend_sep.setStyleSheet(f"color: {C.BORDER}; margin: 4px 0;")
+            self._lay.addWidget(pend_sep)
+
+        # ── Follow-up suggestions row ──
+        followup_row = self._build_followup_row()
+        self._lay.addWidget(followup_row)
+
+        # ── Export / Import controls ──
+        ei_row = QHBoxLayout(); ei_row.setSpacing(6)
+        exp_btn = QPushButton("📤 Export")
+        exp_btn.setFixedSize(70, 24)
+        exp_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        exp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        exp_btn.setToolTip("Export all memories to JSON")
+        exp_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {C.ACC2};
+                border: 1px solid {C.ACC2}; border-radius: 3px; }}
+            QPushButton:hover {{ background: {C.ACC2}; color: #000000; }}
+        """)
+        exp_btn.clicked.connect(self._export_memories)
+        ei_row.addWidget(exp_btn)
+
+        imp_btn = QPushButton("📥 Import")
+        imp_btn.setFixedSize(70, 24)
+        imp_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        imp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        imp_btn.setToolTip("Import memories from JSON")
+        imp_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {C.ACC2};
+                border: 1px solid {C.ACC2}; border-radius: 3px; }}
+            QPushButton:hover {{ background: {C.ACC2}; color: #000000; }}
+        """)
+        imp_btn.clicked.connect(self._import_memories)
+        ei_row.addWidget(imp_btn)
+        ei_row.addStretch()
+
+        ei_wrapper = QWidget()
+        ei_wrapper.setLayout(ei_row)
+        self._lay.addWidget(ei_wrapper)
+
+        ei_sep = QFrame(); ei_sep.setFrameShape(QFrame.Shape.HLine)
+        ei_sep.setStyleSheet(f"color: {C.BORDER}; margin: 6px 0;")
+        self._lay.addWidget(ei_sep)
 
         if not rows:
             empty = QLabel("Nothing stored yet.")
@@ -2994,11 +3158,44 @@ class MemoryOverlay(_HudOverlay):
                 txt.setStyleSheet(f"color: {C.TEXT}; background: transparent;")
                 line.addWidget(txt, 1)
 
+                # Confidence badge + source snippet
+                conf = _entry_confidence(r.get("entry")) if "entry" in r else CONF_HIGH
+                conf_color = {"high": C.GREEN, "medium": C.ACC2, "low": C.RED}.get(
+                    conf, C.TEXT_DIM)
+                pconf = QLabel(conf.upper())
+                pconf.setFixedWidth(44)
+                pconf.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+                pconf.setStyleSheet(f"color: {conf_color}; background: transparent;")
+                line.addWidget(pconf)
+
+                psrc = QLabel(f"«{_entry_source(r.get('entry'))}»" if _entry_source(r.get("entry")) else "—")
+                psrc.setFont(QFont("Courier New", 7))
+                psrc.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+                psrc.setWordWrap(True)
+                psrc.setToolTip("Utterance that triggered this memory")
+                line.addWidget(psrc, 1)
+
                 meta = QLabel(f"{r['category'][:4]} · {r['updated'] or '—'}")
                 meta.setFont(QFont("Courier New", 7))
                 meta.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
                 line.addWidget(meta)
 
+                # Edit button
+                ed = QPushButton("✎")
+                ed.setFixedSize(20, 20)
+                ed.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+                ed.setCursor(Qt.CursorShape.PointingHandCursor)
+                ed.setToolTip("Edit this memory")
+                ed.setStyleSheet(f"""
+                    QPushButton {{ background: transparent; color: {C.ACC2};
+                        border: 1px solid {C.ACC2}; border-radius: 3px; }}
+                    QPushButton:hover {{ background: {C.ACC2}; color: #000000; }}
+                """)
+                ed.clicked.connect(
+                    lambda _=False, c=r["category"], k=r["key"], v=r["value"]: self._edit_memory(c, k, v))
+                line.addWidget(ed)
+
+                # Forget button
                 rm = QPushButton("✕")
                 rm.setFixedSize(20, 20)
                 rm.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
@@ -3013,9 +3210,72 @@ class MemoryOverlay(_HudOverlay):
                     lambda _=False, c=r["category"], k=r["key"]: self._forget(c, k))
                 line.addWidget(rm)
 
+                # ── Feedback buttons ──
+                fb = r.get("entry", {}).get("feedback", {})
+                helpful = fb.get("helpful", 0)
+                not_helpful = fb.get("not_helpful", 0)
+
+                fu = QPushButton("👍")
+                fu.setFixedSize(20, 20)
+                fu.setFont(QFont("Courier New", 8))
+                fu.setCursor(Qt.CursorShape.PointingHandCursor)
+                fu.setToolTip("Mark helpful")
+                fu.setStyleSheet(f"""
+                    QPushButton {{ background: transparent; color: {C.GREEN};
+                        border: 1px solid {C.GREEN}; border-radius: 2px; }}
+                    QPushButton:hover {{ background: {C.GREEN}; color: #000000; }}
+                """)
+                fu.clicked.connect(
+                    lambda _=False, c=r["category"], k=r["key"]: self._feedback_helpful(c, k))
+                line.addWidget(fu)
+
+                fn = QPushButton("👎")
+                fn.setFixedSize(20, 20)
+                fn.setFont(QFont("Courier New", 8))
+                fn.setCursor(Qt.CursorShape.PointingHandCursor)
+                fn.setToolTip("Mark not helpful")
+                fn.setStyleSheet(f"""
+                    QPushButton {{ background: transparent; color: {C.TEXT_DIM};
+                        border: 1px solid {C.BORDER}; border-radius: 2px; }}
+                    QPushButton:hover {{ color: {C.RED}; border-color: {C.RED}; }}
+                """)
+                fn.clicked.connect(
+                    lambda _=False, c=r["category"], k=r["key"]: self._feedback_not_helpful(c, k))
+                line.addWidget(fn)
+
                 holder = QWidget()
                 holder.setLayout(line)
                 ilay.addWidget(holder)
+
+                # ── Graph relationships sub-row ──
+                try:
+                    rels = get_graph_relationships(r["category"], r["key"])
+                except Exception:
+                    rels = []
+                if rels:
+                    rel_line = QHBoxLayout(); rel_line.setSpacing(4)
+                    rel_lbl = QLabel("  ↳ related: ")
+                    rel_lbl.setFont(QFont("Courier New", 7))
+                    rel_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+                    rel_line.addWidget(rel_lbl)
+                    for i, rel in enumerate(rels[:4]):
+                        direction = rel.get("direction", "out")
+                        arrow = "→" if direction == "out" else "←"
+                        target = rel.get("target", rel.get("source", "?"))
+                        relation = rel.get("relation", "related_to")
+                        r_lbl = QLabel(f"{arrow} {relation} {target}")
+                        r_lbl.setFont(QFont("Courier New", 7))
+                        r_lbl.setStyleSheet(f"color: {C.ACC2}; background: transparent;")
+                        rel_line.addWidget(r_lbl)
+                        if i < 3:
+                            sep_lbl = QLabel(" · ")
+                            sep_lbl.setFont(QFont("Courier New", 7))
+                            sep_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+                            rel_line.addWidget(sep_lbl)
+                    rel_line.addStretch()
+                    rel_holder = QWidget()
+                    rel_holder.setLayout(rel_line)
+                    ilay.addWidget(rel_holder)
 
             ilay.addStretch()
             scroll.setWidget(inner)
@@ -3047,6 +3307,411 @@ class MemoryOverlay(_HudOverlay):
         # Qt is entitled to touch the sender after a slot returns; tearing it
         # down mid-emission is how a widget ends up half-alive on screen.
         QTimer.singleShot(0, self._rebuild)
+
+    def _confirm_pending(self, key: str):
+        from memory.memory_manager import confirm_pending
+        confirm_pending(key)
+        QTimer.singleShot(0, self._rebuild)
+
+    def _dismiss_pending(self, key: str):
+        from memory.memory_manager import dismiss_pending
+        dismiss_pending(key)
+        QTimer.singleShot(0, self._rebuild)
+
+    def _edit_memory(self, category: str, key: str, current_value: str):
+        """Open a small inline editor for a memory value."""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLineEdit, QDialogButtonBox
+        from memory.memory_manager import edit_memory
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Edit {key.replace('_', ' ')}")
+        dlg.setFixedWidth(340)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        dlg.setStyleSheet(f"""
+            QDialog {{
+                background: {C.BG};
+                border: 1px solid {C.BORDER};
+                border-radius: 6px;
+                color: {C.TEXT};
+            }}
+            QLineEdit {{
+                background: {C.PANEL2};
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+                border-radius: 3px;
+                padding: 6px 8px;
+                font-size: {TYPE_BODY.size}px;
+            }}
+            QLineEdit:focus {{ border: 1px solid {C.ACC}; }}
+            QPushButton {{
+                background: {C.ACC};
+                color: {C.BG};
+                border: none;
+                border-radius: 3px;
+                padding: 6px 14px;
+                font-size: {TYPE_BODY.size}px;
+                font-weight: {TYPE_MEDIUM.weight};
+            }}
+            QPushButton:hover {{ background: {_lighten(C.ACC, 0.10)}; }}
+        """)
+
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(10)
+
+        lbl = QLabel(f"New value for <b>{key.replace('_', ' ')}</b> ({category}):")
+        lbl.setFont(QFont("Courier New", 8))
+        lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        lay.addWidget(lbl)
+
+        edit = QLineEdit(current_value)
+        edit.setFont(QFont("Courier New", 9))
+        edit.selectAll()
+        lay.addWidget(edit)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+
+        if dlg.exec():
+            new_val = edit.text().strip()
+            if new_val:
+                edit_memory(key, new_val, category)
+                QTimer.singleShot(0, self._rebuild)
+
+    def _feedback_helpful(self, category: str, key: str):
+        from memory.memory_manager import feedback_helpful
+        feedback_helpful(category, key)
+        QTimer.singleShot(0, self._rebuild)
+
+    def _feedback_not_helpful(self, category: str, key: str):
+        from memory.memory_manager import feedback_not_helpful
+        feedback_not_helpful(category, key)
+        QTimer.singleShot(0, self._rebuild)
+
+    def _feedback_correct(self, category: str, key: str, current_value: str):
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLineEdit, QDialogButtonBox
+        from memory.memory_manager import feedback_correct
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Correct {key.replace('_', ' ')}")
+        dlg.setFixedWidth(340)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        dlg.setStyleSheet(f"""
+            QDialog {{
+                background: {C.BG};
+                border: 1px solid {C.BORDER};
+                border-radius: 6px;
+                color: {C.TEXT};
+            }}
+            QLineEdit {{
+                background: {C.PANEL2};
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+                border-radius: 3px;
+                padding: 6px 8px;
+                font-size: {TYPE_BODY.size}px;
+            }}
+            QLineEdit:focus {{ border: 1px solid {C.ACC}; }}
+            QPushButton {{
+                background: {C.ACC};
+                color: {C.BG};
+                border: none;
+                border-radius: 3px;
+                padding: 6px 14px;
+                font-size: {TYPE_BODY.size}px;
+                font-weight: {TYPE_MEDIUM.weight};
+            }}
+            QPushButton:hover {{ background: {_lighten(C.ACC, 0.10)}; }}
+        """)
+
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(10)
+
+        lbl = QLabel(f"Correct value for <b>{key.replace('_', ' ')}</b> ({category}):")
+        lbl.setFont(QFont("Courier New", 8))
+        lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        lay.addWidget(lbl)
+
+        edit = QLineEdit(current_value)
+        edit.setFont(QFont("Courier New", 9))
+        edit.selectAll()
+        lay.addWidget(edit)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+
+        if dlg.exec():
+            new_val = edit.text().strip()
+            if new_val:
+                feedback_correct(category, key, new_val)
+                QTimer.singleShot(0, self._rebuild)
+
+    # ── Follow-up suggestions ──
+    def _build_followup_row(self) -> QWidget:
+        """Build a row of suggested follow-up questions from stored memories."""
+        wrapper = QWidget(self)
+        wrapper.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        wrapper.setStyleSheet("QWidget { background: transparent; }")
+
+        lay = QVBoxLayout(wrapper)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+
+        hdr = QLabel("💬  Follow-up suggestions")
+        hdr.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        hdr.setStyleSheet(f"color: {C.ACC2}; background: transparent;")
+        lay.addWidget(hdr)
+
+        try:
+            suggestions = get_followup_suggestions(limit=4)
+        except Exception:
+            suggestions = []
+
+        if not suggestions:
+            empty = QLabel("No stored memories to follow up on yet.")
+            empty.setFont(QFont("Courier New", 7))
+            empty.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+            lay.addWidget(empty)
+            return wrapper
+
+        for s in suggestions:
+            row = QHBoxLayout(); row.setSpacing(6)
+            q_lbl = QLabel(s["question"])
+            q_lbl.setFont(QFont("Courier New", 8))
+            q_lbl.setStyleSheet(f"color: {C.TEXT}; background: transparent;")
+            q_lbl.setWordWrap(True)
+            row.addWidget(q_lbl, 1)
+
+            ctx_lbl = QLabel(s["context"])
+            ctx_lbl.setFont(QFont("Courier New", 7))
+            ctx_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+            ctx_lbl.setFixedWidth(100)
+            row.addWidget(ctx_lbl)
+
+            act_btn = QPushButton("Ask")
+            act_btn.setFixedSize(40, 20)
+            act_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+            act_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            act_btn.setStyleSheet(f"""
+                QPushButton {{ background: transparent; color: {C.ACC};
+                    border: 1px solid {C.ACC}; border-radius: 2px; }}
+                QPushButton:hover {{ background: {C.ACC}; color: #000000; }}
+            """)
+            act_btn.clicked.connect(
+                lambda _=False, q=s["question"]: self._on_followup_clicked(q))
+            row.addWidget(act_btn)
+
+            holder = QWidget()
+            holder.setLayout(row)
+            lay.addWidget(holder)
+
+        return wrapper
+
+    def _on_followup_clicked(self, question: str):
+        """Send a follow-up question as if the user typed it."""
+        self._input.setText(question)
+        self._send()
+
+    # ── Export / Import ──
+    def _export_memories(self):
+        from memory.memory_manager import export_memories
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        json_text = export_memories()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export memories", "ultron_memories.json", "JSON files (*.json)")
+        if path:
+            try:
+                Path(path).write_text(json_text, encoding="utf-8")
+                self.show_toast(f"Memories exported to {Path(path).name}", level="success")
+            except Exception as e:
+                QMessageBox.warning(self, "Export failed", str(e))
+
+    def _import_memories(self):
+        from memory.memory_manager import import_memories
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox, QInputDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import memories", "", "JSON files (*.json)")
+        if path:
+            try:
+                json_text = Path(path).read_text(encoding="utf-8")
+                result = import_memories(json_text, merge=True)
+                self.show_toast(result, level="success")
+                QTimer.singleShot(0, self._rebuild)
+            except Exception as e:
+                QMessageBox.warning(self, "Import failed", str(e))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# GestureOverlay — Project Minority hands-sign control panel
+# ═════════════════════════════════════════════════════════════════════════════
+
+class GestureOverlay(_HudOverlay):
+    """Floating overlay for Project Minority spatial gesture control.
+
+    Shows engine status, last recognised hand sign, camera telemetry, and
+    start/stop controls. Also lists every gesture and what it triggers.
+    """
+
+    gesture_toggle = pyqtSignal()
+    gesture_status_refresh = pyqtSignal()
+
+    _OW = 460
+
+    # Gesture → description → action mapping
+    _GESTURES = [
+        ("🖐  Open Palm",    "Wake Ultron / Voice Input Ready"),
+        ("✊  Fist Clench",   "Emergency Workstation Lockdown"),
+        ("👉  Swipe Right",  "Next Media Track"),
+        ("👈  Swipe Left",   "Previous Media Track"),
+        ("✌️  Peace Sign",    "Toggle Play / Pause Media"),
+        ("👆  Hand Raised",  "Volume Up"),
+        ("👇  Hand Lowered", "Volume Down"),
+    ]
+
+    def __init__(self, parent=None, status_text="", engine_running=False):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            GestureOverlay {{
+                background: rgba(0, 6, 10, 246);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 6px;
+            }}
+        """)
+        self.setFixedWidth(self._OW)
+
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(20, 16, 20, 16)
+        self._lay.setSpacing(8)
+
+        hdr = QLabel("👁  PROJECT MINORITY — GESTURE CONTROL")
+        hdr.setFont(QFont("Courier New", 11, QFont.Weight.Bold))
+        hdr.setStyleSheet(f"color: {C.ACC2}; background: transparent; letter-spacing: 1px;")
+        self._lay.addWidget(hdr)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
+        self._lay.addWidget(sep)
+
+        # ── Engine status row ──
+        self._status_lbl = QLabel(status_text or "Gesture engine status — initialising…")
+        self._status_lbl.setFont(QFont("Courier New", 8))
+        self._status_lbl.setStyleSheet(f"color: {C.TEXT}; background: transparent;")
+        self._status_lbl.setWordWrap(True)
+        self._lay.addWidget(self._status_lbl)
+
+        self._last_lbl = QLabel(f"Last sign: {self._last_gesture_display()}")
+        self._last_lbl.setFont(QFont("Courier New", 8))
+        self._last_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        self._lay.addWidget(self._last_lbl)
+
+        # ── Start/Stop controls ──
+        btn_row = QHBoxLayout(); btn_row.setSpacing(8)
+
+        self._toggle_btn = QPushButton("STOP ENGINE" if engine_running else "START ENGINE")
+        self._toggle_btn.setFixedHeight(30)
+        self._toggle_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        self._toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        toggle_colour = C.RED if engine_running else C.GREEN
+        self._toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {toggle_colour};
+                border: 1px solid {toggle_colour}; border-radius: 4px;
+            }}
+            QPushButton:hover {{ background: {toggle_colour}; color: #000000; }}
+        """)
+        self._toggle_btn.clicked.connect(lambda: self.gesture_toggle.emit())
+        btn_row.addWidget(self._toggle_btn)
+
+        refresh_btn = QPushButton("REFRESH")
+        refresh_btn.setFixedHeight(30)
+        refresh_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        refresh_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.ACC2};
+                border: 1px solid {C.ACC2}; border-radius: 4px;
+            }}
+            QPushButton:hover {{ background: {C.ACC2}; color: #000000; }}
+        """)
+        refresh_btn.clicked.connect(lambda: self.gesture_status_refresh.emit())
+        btn_row.addWidget(refresh_btn)
+
+        btn_row.addStretch()
+        self._lay.addLayout(btn_row)
+
+        sep2 = QFrame(); sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet(f"color: {C.BORDER}; margin: 6px 0;")
+        self._lay.addWidget(sep2)
+
+        # ── Gesture cheat sheet ──
+        cheat_hdr = QLabel("HAND SIGNS → ACTIONS")
+        cheat_hdr.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        cheat_hdr.setStyleSheet(f"color: {C.PRI}; background: transparent; letter-spacing: 0.5px;")
+        self._lay.addWidget(cheat_hdr)
+
+        for gesture, action in self._GESTURES:
+            row = QHBoxLayout(); row.setSpacing(6)
+            g_lbl = QLabel(gesture)
+            g_lbl.setFont(QFont("Courier New", 8))
+            g_lbl.setStyleSheet(f"color: {C.TEXT}; background: transparent;")
+            g_lbl.setFixedWidth(130)
+            row.addWidget(g_lbl)
+
+            a_lbl = QLabel(action)
+            a_lbl.setFont(QFont("Courier New", 7))
+            a_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+            a_lbl.setWordWrap(True)
+            row.addWidget(a_lbl, 1)
+            self._lay.addLayout(row)
+
+        self._lay.addStretch()
+
+        close = QPushButton("CLOSE")
+        close.setFixedHeight(30)
+        close.setFont(QFont("Courier New", 9))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_MED};
+                border: 1px solid {C.BORDER}; border-radius: 3px;
+            }}
+            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+        """)
+        close.clicked.connect(self.hide)
+        self._lay.addWidget(close)
+
+    def _last_gesture_display(self) -> str:
+        """Return a human-readable last gesture string."""
+        try:
+            from actions.gesture_control import _LAST_GESTURE_NAME, _LAST_GESTURE_TIME
+            import time
+            name = _LAST_GESTURE_NAME or "None"
+            if name == "None":
+                return "None yet"
+            last_sec = int(time.time() - _LAST_GESTURE_TIME) if _LAST_GESTURE_TIME > 0 else 999
+            return f"{name} ({last_sec}s ago)"
+        except Exception:
+            return "Unknown"
+
+    def refresh_status(self, status_text: str, engine_running: bool):
+        """Refresh the overlay's status display from engine telemetry."""
+        self._status_lbl.setText(status_text)
+        self._last_lbl.setText(f"Last sign: {self._last_gesture_display()}")
+        toggle_colour = C.RED if engine_running else C.GREEN
+        self._toggle_btn.setText("STOP ENGINE" if engine_running else "START ENGINE")
+        self._toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {toggle_colour};
+                border: 1px solid {toggle_colour}; border-radius: 4px;
+            }}
+            QPushButton:hover {{ background: {toggle_colour}; color: #000000; }}
+        """)
 
 
 class ClipboardPanel(QWidget):
@@ -3688,6 +4353,10 @@ class MainWindow(QMainWindow):
         self._current_file: str | None = None
         self._remote_overlay: RemoteKeyOverlay | None = None
         self._customize_overlay: CustomizeOverlay | None = None
+        self._gesture_overlay = None
+        self._gesture_engine_running = False
+        self._last_gesture_name = "None"
+        self._last_gesture_time = 0.0
 
         central = QWidget()
         central.setStyleSheet(f"background: {C.BG};")
@@ -4620,13 +5289,24 @@ class MainWindow(QMainWindow):
         except Exception:
             self._proc_lbl.setText("PROC  --")
 
+        # ── Project Minority gesture callback setup ──
+        QTimer.singleShot(100, self._setup_gesture_callback)
+
 
     def _build_header(self) -> QWidget:
-        w = QWidget()
-        w.setFixedHeight(54)
-        w.setStyleSheet(f"background: {C.DARK}; border-bottom: 1px solid {C.BORDER_B};")
+        c = _colors()
+        w = glass_panel(self)
+        w.setFixedHeight(60)
+        w.setStyleSheet(w.styleSheet() + f"""
+            QWidget {{
+                background: {c['BG']};
+                border-bottom: 1px solid {c['BORDER_B']};
+                border-radius: 0;
+            }}
+        """)
         lay = QHBoxLayout(w)
-        lay.setContentsMargins(16, 0, 16, 0)
+        lay.setContentsMargins(SPACE_LG, 0, SPACE_LG, 0)
+        lay.setSpacing(SPACE_MD)
 
         def _badge(txt, color=C.TEXT_MED):
             l = QLabel(txt)
@@ -4636,82 +5316,78 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(_badge(APP_VERSION, C.PRI))
         lay.addSpacing(8)
-        self._drawer_btn = QPushButton("⚙")
+        self._drawer_btn = ghost_button("⚙", self)
         self._drawer_btn.setFixedSize(28, 28)
         self._drawer_btn.setFont(QFont("Segoe UI", 11))
         self._drawer_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._drawer_btn.setToolTip("Settings & Controls")
-        self._drawer_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {C.PANEL}; color: {C.TEXT_DIM};
-                border: 1px solid {C.BORDER}; border-radius: 5px;
-            }}
-            QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI_DIM}; background: {C.PRI_GHO}; }}
-            QPushButton:checked {{ color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO}; }}
-        """)
         self._drawer_btn.setCheckable(True)
         self._drawer_btn.setToolTip("Setup — things you set once")
         self._drawer_btn.clicked.connect(self._toggle_drawer)
         lay.addWidget(self._drawer_btn)
 
-        self._ctrl_btn = QPushButton("🎛")
+        self._ctrl_btn = ghost_button("🎛", self)
         self._ctrl_btn.setFixedSize(28, 28)
         self._ctrl_btn.setFont(QFont("Segoe UI", 11))
         self._ctrl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._ctrl_btn.setToolTip("Controls — the everyday switches")
-        self._ctrl_btn.setStyleSheet(self._drawer_btn.styleSheet())
         self._ctrl_btn.setCheckable(True)
         self._ctrl_btn.clicked.connect(self._toggle_controls)
         lay.addSpacing(4)
         lay.addWidget(self._ctrl_btn)
 
-        self._voice_hdr_btn = QPushButton("🎙 VOICE")
+        self._voice_hdr_btn = secondary_button("🎙 VOICE", self)
         self._voice_hdr_btn.setFixedHeight(28)
         self._voice_hdr_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
         self._voice_hdr_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._voice_hdr_btn.setToolTip("Voice Settings — choose Ultron voice profile & speed")
-        self._voice_hdr_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {C.PANEL}; color: {C.PRI};
-                border: 1px solid {C.BORDER_B}; border-radius: 5px;
-                padding: 0 10px;
-            }}
-            QPushButton:hover {{ background: {C.PRI_GHO}; border-color: {C.PRI}; color: {C.WHITE}; }}
-        """)
         self._voice_hdr_btn.clicked.connect(self._open_customize)
         lay.addSpacing(4)
         lay.addWidget(self._voice_hdr_btn)
         lay.addStretch()
 
-        mid = QVBoxLayout(); mid.setSpacing(2)
+        mid = QVBoxLayout(); mid.setSpacing(SPACE_XS)
         _disp = self._assistant_name.upper()
         self._title_lbl = QLabel(_disp)
         self._title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._title_lbl.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
-        self._title_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent; letter-spacing: 5px;")
+        self._title_lbl.setFont(font(TYPE_DISPLAY))
+        self._title_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent; letter-spacing: 3px;")
         mid.addWidget(self._title_lbl)
         _sub_text = ("PEACE IN OUR TIME // AUTONOMOUS AI SYSTEM"
                      if _disp in ("ULTRON", "U.L.T.R.O.N")
                      else "AUTONOMOUS TACTICAL AI")
         self._sub_lbl = QLabel(_sub_text)
         self._sub_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._sub_lbl.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
-        self._sub_lbl.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent; letter-spacing: 1.5px;")
+        self._sub_lbl.setFont(font(TYPE_CAPTION))
+        self._sub_lbl.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent; letter-spacing: 1px;")
         mid.addWidget(self._sub_lbl)
         lay.addLayout(mid)
         lay.addStretch()
 
-        right_col = QVBoxLayout(); right_col.setSpacing(2)
+        right_col = QVBoxLayout(); right_col.setSpacing(SPACE_XS)
         self._clock_lbl = QLabel("00:00:00")
-        self._clock_lbl.setFont(QFont("Consolas", 13, QFont.Weight.Bold))
+        self._clock_lbl.setFont(font(TYPE_HEADING))
         self._clock_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
         self._clock_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
         right_col.addWidget(self._clock_lbl)
         self._date_lbl = QLabel("")
-        self._date_lbl.setFont(QFont("Consolas", 7))
+        self._date_lbl.setFont(font(TYPE_CAPTION))
         self._date_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
         self._date_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
         right_col.addWidget(self._date_lbl)
+
+        # ── AI status badge (transparency: user always knows the AI state) ──
+        self._ai_status = AIStatusBadge(self)
+        self._ai_status.setFixedWidth(90)
+        self._ai_status.setAlignment(Qt.AlignmentFlag.AlignRight)
+        right_col.addWidget(self._ai_status)
+
+        # ── Project Minority gesture badge (touchless hands-sign control) ──
+        self._gesture_status = GestureStatusBadge(self)
+        self._gesture_status.setFixedWidth(90)
+        self._gesture_status.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._gesture_status.clicked.connect(self._show_gesture_overlay)
+        right_col.addWidget(self._gesture_status)
         lay.addLayout(right_col)
         return w
 
@@ -4720,19 +5396,26 @@ class MainWindow(QMainWindow):
         self._date_lbl.setText(time.strftime("%a %d %b %Y"))
 
     def _build_left_panel(self) -> QWidget:
-        w = QWidget()
+        c = _colors()
+        w = glass_panel(self)
         w.setFixedWidth(_LEFT_W)
-        w.setStyleSheet(f"background: {C.DARK}; border-right: 1px solid {C.BORDER};")
+        w.setStyleSheet(w.styleSheet() + f"""
+            QWidget {{
+                background: {c['BG']};
+                border-right: 1px solid {c['BORDER']};
+                border-radius: 0;
+            }}
+        """)
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(8, 10, 8, 10)
-        lay.setSpacing(6)
+        lay.setContentsMargins(SPACE_SM, SPACE_MD, SPACE_SM, SPACE_MD)
+        lay.setSpacing(SPACE_SM)
 
         hdr = QLabel("◈ SYS TELEMETRY")
-        hdr.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+        hdr.setFont(font(TYPE_CAPTION))
         hdr.setStyleSheet(f"color: {C.PRI}; background: transparent; "
-                          f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 4px; letter-spacing: 1px;")
+                          f"border-bottom: 1px solid {C.BORDER}; padding-bottom: {SPACE_XS}px; letter-spacing: 1px;")
         lay.addWidget(hdr)
-        lay.addSpacing(2)
+        lay.addSpacing(SPACE_XS)
 
         self._bar_cpu = MetricBar("CPU", C.PRI)
         self._bar_mem = MetricBar("MEM", C.ACC2)
@@ -4746,27 +5429,31 @@ class MainWindow(QMainWindow):
 
         lay.addSpacing(4)
 
-        info_panel = QWidget()
-        info_panel.setStyleSheet(
-            f"background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 4px;"
-        )
+        info_panel = glass_card(self)
+        info_panel.setStyleSheet(info_panel.styleSheet() + f"""
+            QWidget {{
+                background: {C.PANEL2};
+                border: 1px solid {C.BORDER};
+                border-radius: 6px;
+            }}
+        """)
         ip_lay = QVBoxLayout(info_panel)
-        ip_lay.setContentsMargins(6, 5, 6, 5)
-        ip_lay.setSpacing(3)
+        ip_lay.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
+        ip_lay.setSpacing(SPACE_XS)
 
         self._uptime_lbl = QLabel("UP  --:--")
-        self._uptime_lbl.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+        self._uptime_lbl.setFont(font(TYPE_SMALL))
         self._uptime_lbl.setStyleSheet(f"color: {C.GREEN}; background: transparent; border: none;")
         ip_lay.addWidget(self._uptime_lbl)
 
         self._proc_lbl = QLabel("PROC  --")
-        self._proc_lbl.setFont(QFont("Consolas", 8))
+        self._proc_lbl.setFont(font(TYPE_SMALL))
         self._proc_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; border: none;")
         ip_lay.addWidget(self._proc_lbl)
 
         os_name = {"Windows": "WIN", "Darwin": "macOS", "Linux": "LINUX"}.get(_OS, _OS.upper())
         os_lbl = QLabel(f"OS  {os_name}")
-        os_lbl.setFont(QFont("Consolas", 8))
+        os_lbl.setFont(font(TYPE_SMALL))
         os_lbl.setStyleSheet(f"color: {C.ACC2}; background: transparent; border: none;")
         ip_lay.addWidget(os_lbl)
 
@@ -4781,26 +5468,33 @@ class MainWindow(QMainWindow):
             ("PROTOCOL\n" + APP_PROTOCOL, C.TEXT_MED),
         ]:
             lbl = QLabel(txt)
-            lbl.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
+            lbl.setFont(font(TYPE_CAPTION))
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet(
                 f"color: {col}; background: {C.PANEL2};"
-                f"border: 1px solid {C.BORDER_A}; border-radius: 3px; padding: 4px;"
+                f"border: 1px solid {C.BORDER_A}; border-radius: 6px; padding: {SPACE_XS}px {SPACE_SM}px;"
             )
             lay.addWidget(lbl)
 
         return w
     def _build_right_panel(self) -> QWidget:
-        w = QWidget()
+        c = _colors()
+        w = glass_panel(self)
         w.setFixedWidth(_RIGHT_W)
-        w.setStyleSheet(f"background: {C.DARK}; border-left: 1px solid {C.BORDER};")
+        w.setStyleSheet(w.styleSheet() + f"""
+            QWidget {{
+                background: {c['BG']};
+                border-left: 1px solid {c['BORDER']};
+                border-radius: 0;
+            }}
+        """)
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.setSpacing(6)
+        lay.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
+        lay.setSpacing(SPACE_MD)
 
         def _sec(txt):
             l = QLabel(f"▸ {txt}")
-            l.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+            l.setFont(font(TYPE_CAPTION))
             l.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; letter-spacing: 0.5px;")
             return l
 
@@ -4809,7 +5503,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._log, stretch=1)
 
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
+        sep.setStyleSheet(f"color: {C.BORDER}; margin: {SPACE_XS}px 0;")
         lay.addWidget(sep)
 
         lay.addWidget(_sec("FILE UPLOAD"))
@@ -4818,41 +5512,35 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._drop_zone)
 
         self._file_hint = QLabel("No file loaded — drop or click above to upload")
-        self._file_hint.setFont(QFont("Segoe UI", 8))
+        self._file_hint.setFont(font(TYPE_SMALL))
         self._file_hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
         self._file_hint.setWordWrap(True)
         lay.addWidget(self._file_hint)
 
         sep2 = QFrame(); sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
+        sep2.setStyleSheet(f"color: {C.BORDER}; margin: {SPACE_XS}px 0;")
         lay.addWidget(sep2)
+
+        # ── suggestion chips — intent-first quick actions ──
+        self._suggestion_row = suggestion_row(
+            self,
+            ["Check system status", "Run a scan", "Summarize logs", "What can you do?"],
+            self._on_suggestion_clicked,
+        )
+        lay.addWidget(self._suggestion_row)
 
         lay.addWidget(_sec("COMMAND INPUT"))
         lay.addLayout(self._build_input_row())
 
-        self._interrupt_btn = QPushButton("✋  INTERRUPT  [ESC]")
+        self._interrupt_btn = danger_button("✋  INTERRUPT  [ESC]", self)
         self._interrupt_btn.setFixedHeight(34)
         self._interrupt_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        self._interrupt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._interrupt_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: #1a080c; color: {C.MUTED_C};
-                border: 1px solid {C.BORDER_B}; border-radius: 5px;
-            }}
-            QPushButton:hover {{
-                background: #2a0b12; border: 1px solid {C.RED}; color: {C.WHITE};
-            }}
-            QPushButton:pressed {{
-                background: #3d0d17;
-            }}
-        """)
         self._interrupt_btn.clicked.connect(self._do_interrupt)
         lay.addWidget(self._interrupt_btn)
 
-        self._mute_btn = QPushButton("🎙  MICROPHONE ACTIVE")
+        self._mute_btn = secondary_button("🎙  MICROPHONE ACTIVE", self)
         self._mute_btn.setFixedHeight(32)
         self._mute_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        self._mute_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._mute_btn.clicked.connect(self._toggle_mute)
         self._style_mute_btn()
         lay.addWidget(self._mute_btn)
@@ -4861,21 +5549,24 @@ class MainWindow(QMainWindow):
 
     def _build_quick_drawer(self) -> QWidget:
         """Floating overlay panel shown when the ⚙ header button is toggled."""
+        c = _colors()
         _BTN_STYLE_PRI = f"""
             QPushButton {{
-                background: {C.PANEL2}; color: {C.PRI};
-                border: 1px solid {C.BORDER_B}; border-radius: 5px;
-                text-align: left; padding: 0 10px;
+                background: {c['PANEL2']}; color: {c['PRI']};
+                border: 1px solid {c['BORDER_B']}; border-radius: 6px;
+                text-align: left; padding: 0 12px;
             }}
-            QPushButton:hover {{ background: {C.PRI_GHO}; border-color: {C.PRI}; color: {C.WHITE}; }}
+            QPushButton:hover {{ background: {c['PRI_GHO']}; border-color: {c['PRI']}; color: {c['WHITE']}; }}
+            QPushButton:focus-visible {{ border: 2px solid {c['ACC']}; outline: none; }}
         """
         _BTN_STYLE_DIM = f"""
             QPushButton {{
-                background: transparent; color: {C.TEXT_MED};
-                border: 1px solid {C.BORDER}; border-radius: 5px;
-                text-align: left; padding: 0 10px;
+                background: transparent; color: {c['TEXT_MED']};
+                border: 1px solid {c['BORDER']}; border-radius: 6px;
+                text-align: left; padding: 0 12px;
             }}
-            QPushButton:hover {{ color: {C.PRI}; border-color: {C.BORDER_B}; background: {C.PANEL}; }}
+            QPushButton:hover {{ color: {c['PRI']}; border-color: {c['BORDER_B']}; background: {c['PANEL']}; }}
+            QPushButton:focus-visible {{ border: 2px solid {c['ACC']}; outline: none; }}
         """
 
         self._BTN_PRI, self._BTN_DIM = _BTN_STYLE_PRI, _BTN_STYLE_DIM
@@ -5114,32 +5805,18 @@ class MainWindow(QMainWindow):
             self._place_drawer(self._ctrl_drawer, left)
 
     def _build_input_row(self) -> QHBoxLayout:
-        row = QHBoxLayout(); row.setSpacing(6)
+        row = QHBoxLayout(); row.setSpacing(SPACE_SM)
         self._input = QLineEdit()
         self._input.setPlaceholderText("Command Ultron or ask anything…")
-        self._input.setFont(QFont("Segoe UI", 9))
-        self._input.setFixedHeight(32)
-        self._input.setStyleSheet(f"""
-            QLineEdit {{
-                background: {C.PANEL2}; color: {C.WHITE};
-                border: 1px solid {C.BORDER}; border-radius: 5px; padding: 4px 10px;
-            }}
-            QLineEdit:focus {{ border: 1px solid {C.PRI}; background: {C.DARK}; }}
-        """)
+        self._input.setFont(font(TYPE_BODY))
+        self._input.setFixedHeight(40)
+        style_input(self._input)
         self._input.returnPressed.connect(self._send)
         row.addWidget(self._input)
 
-        send = QPushButton("▸")
-        send.setFixedSize(32, 32)
+        send = primary_button("▸", self)
+        send.setFixedSize(40, 40)
         send.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        send.setCursor(Qt.CursorShape.PointingHandCursor)
-        send.setStyleSheet(f"""
-            QPushButton {{
-                background: {C.PANEL}; color: {C.PRI};
-                border: 1px solid {C.BORDER_B}; border-radius: 5px;
-            }}
-            QPushButton:hover {{ background: {C.PRI_GHO}; border: 1px solid {C.PRI}; color: {C.WHITE}; }}
-        """)
         send.clicked.connect(self._send)
         row.addWidget(send)
         return row
@@ -5149,30 +5826,30 @@ class MainWindow(QMainWindow):
         Collapsible panel below the HUD — shows search results, news, briefings.
         Hidden by default; appears when show_content() is called.
         """
-        w = QWidget()
+        w = glass_card(self)
         w.setObjectName("ContentPanel")
-        w.setStyleSheet(f"""
+        w.setStyleSheet(w.styleSheet() + f"""
             QWidget#ContentPanel {{
-                background: {C.PANEL};
                 border-top: 1px solid {C.BORDER_B};
+                border-radius: 0;
             }}
         """)
         w.hide()
 
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(12, 7, 12, 8)
-        lay.setSpacing(5)
+        lay.setContentsMargins(SPACE_MD, SPACE_SM, SPACE_MD, SPACE_SM)
+        lay.setSpacing(SPACE_SM)
 
         # ── header row ───────────────────────────────────────────────────────
-        hdr = QHBoxLayout(); hdr.setSpacing(6)
+        hdr = QHBoxLayout(); hdr.setSpacing(SPACE_SM)
 
         dot = QLabel("◈")
-        dot.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        dot.setFont(font(TYPE_SMALL))
         dot.setStyleSheet(f"color: {C.PRI}; background: transparent;")
         hdr.addWidget(dot)
 
         self._content_title_lbl = QLabel("BRIEFING")
-        self._content_title_lbl.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        self._content_title_lbl.setFont(font(TYPE_CAPTION))
         self._content_title_lbl.setStyleSheet(
             f"color: {C.PRI}; background: transparent; letter-spacing: 1px;"
         )
@@ -5180,21 +5857,13 @@ class MainWindow(QMainWindow):
         hdr.addStretch()
 
         self._content_ts_lbl = QLabel("")
-        self._content_ts_lbl.setFont(QFont("Courier New", 7))
+        self._content_ts_lbl.setFont(font(TYPE_CAPTION))
         self._content_ts_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
         hdr.addWidget(self._content_ts_lbl)
 
-        dismiss = QPushButton("DISMISS  ✕")
-        dismiss.setFont(QFont("Courier New", 7))
-        dismiss.setFixedHeight(18)
-        dismiss.setCursor(Qt.CursorShape.PointingHandCursor)
-        dismiss.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; color: {C.TEXT_DIM};
-                border: 1px solid {C.BORDER}; border-radius: 2px; padding: 0 5px;
-            }}
-            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
-        """)
+        dismiss = ghost_button("DISMISS  ✕", self)
+        dismiss.setFont(font(TYPE_CAPTION))
+        dismiss.setFixedHeight(24)
         dismiss.clicked.connect(w.hide)
         hdr.addWidget(dismiss)
         lay.addLayout(hdr)
@@ -5206,18 +5875,18 @@ class MainWindow(QMainWindow):
         # ── text display ──────────────────────────────────────────────────────
         self._content_display = QTextEdit()
         self._content_display.setReadOnly(True)
-        self._content_display.setFont(QFont("Courier New", 8))
-        self._content_display.setMinimumHeight(60)
+        self._content_display.setFont(font(TYPE_BODY))
+        self._content_display.setMinimumHeight(80)
         self._content_display.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         self._content_display.setStyleSheet(f"""
             QTextEdit {{
-                background: {C.DARK};
+                background: transparent;
                 color: {C.TEXT};
-                border: 1px solid {C.BORDER};
-                border-radius: 3px;
-                padding: 6px 8px;
+                border: none;
+                border-radius: 0;
+                padding: {SPACE_XS}px {SPACE_SM}px;
                 selection-background-color: {C.PRI_GHO};
             }}
             QScrollBar:vertical {{
@@ -5608,13 +6277,20 @@ class MainWindow(QMainWindow):
             threading.Thread(target=self.on_text_command, args=(msg,), daemon=True).start()
 
     def _build_footer(self) -> QWidget:
-        w = QWidget()
-        w.setFixedHeight(22)
-        w.setStyleSheet(f"background: {C.DARK}; border-top: 1px solid {C.BORDER};")
-        lay = QHBoxLayout(w); lay.setContentsMargins(14, 0, 14, 0)
+        c = _colors()
+        w = glass_panel(self)
+        w.setFixedHeight(32)
+        w.setStyleSheet(w.styleSheet() + f"""
+            QWidget {{
+                background: {c['BG']};
+                border-top: 1px solid {c['BORDER']};
+                border-radius: 0;
+            }}
+        """)
+        lay = QHBoxLayout(w); lay.setContentsMargins(SPACE_LG, 0, SPACE_LG, 0)
 
         def _fl(txt, color=C.TEXT_MED):
-            l = QLabel(txt); l.setFont(QFont("Courier New", 7))
+            l = QLabel(txt); l.setFont(font(TYPE_CAPTION))
             l.setStyleSheet(f"color: {color}; background: transparent;")
             return l
 
@@ -5643,6 +6319,15 @@ class MainWindow(QMainWindow):
     def notify_phone_connected(self) -> None:
         if self._remote_overlay and self._remote_overlay.isVisible():
             self._remote_overlay.mark_connected()
+
+    # ── Toast notifications ─────────────────────────────────────────────────
+    # Non-blocking status toasts that appear bottom-right of the HUD area and
+    # auto-dismiss. Used for confirmation, warnings, errors and info messages
+    # that don't warrant a full dialog or log entry.
+    def show_toast(self, message: str, level: str = "info", duration_ms: int = 4000):
+        """Show a toast notification anchored to the central widget."""
+        cw = self.centralWidget()
+        return toast(cw, message, level=level, duration_ms=duration_ms)
 
     def _open_ai_setup(self):
         self._close_setup()
@@ -6287,9 +6972,95 @@ class MainWindow(QMainWindow):
         if self.on_text_command:
             threading.Thread(target=self.on_text_command, args=(txt,), daemon=True).start()
 
+    def _on_suggestion_clicked(self, label: str):
+        """Handle suggestion chip click — fires the intent as a command."""
+        self._input.setText(label)
+        self._send()
+
     def _apply_state(self, state: str):
         self.hud.state    = state
         self.hud.speaking = (state == "SPEAKING")
+        # ── AI status badge: transparency — user always knows the AI state ──
+        badge_state = {
+            "LISTENING": "listening",
+            "THINKING": "thinking",
+            "PROCESSING": "thinking",
+            "SPEAKING": "speaking",
+        }.get(state, "idle")
+        if hasattr(self, "_ai_status"):
+            self._ai_status.set_state(badge_state)
+
+    # ── Project Minority gesture integration ─────────────────────────────
+    def _setup_gesture_callback(self):
+        """Register a callback with the gesture engine so detected hands-signs
+        update the HUD badge in real time."""
+        try:
+            from actions.gesture_control import (
+                set_gesture_callback, get_gesture_status, _GESTURE_RUNNING,
+            )
+            self._gesture_engine_running = bool(_GESTURE_RUNNING)
+            self._gesture_status.set_state("engaged" if self._gesture_engine_running else "standby")
+            set_gesture_callback(self._on_gesture_detected)
+        except Exception:
+            # Gesture engine not available (OpenCV missing, no camera, etc.)
+            self._gesture_engine_running = False
+            self._gesture_status.set_state("standby")
+
+    def _on_gesture_detected(self, gesture_name: str):
+        """Callback fired by the gesture engine when a hands-sign is recognised."""
+        self._last_gesture_name = gesture_name
+        self._last_gesture_time = time.time()
+        self._gesture_engine_running = True
+        if hasattr(self, "_gesture_status"):
+            self._gesture_status.flash_detected(gesture_name)
+        self.write_log(f"[Minority] Gesture: {gesture_name}")
+
+    def _toggle_gesture_engine(self):
+        """Start or stop the Project Minority gesture engine."""
+        try:
+            from actions.gesture_control import (
+                start_gesture_engine, stop_gesture_engine, get_gesture_status,
+                _GESTURE_RUNNING,
+            )
+            if _GESTURE_RUNNING:
+                stop_gesture_engine()
+                self._gesture_engine_running = False
+                self._gesture_status.set_state("standby")
+                self.write_log("[Minority] Gesture engine stopped.")
+            else:
+                res = start_gesture_engine(camera_index=0)
+                self._gesture_engine_running = True
+                self._gesture_status.set_state("engaged")
+                self.write_log("[Minority] Gesture engine started.")
+        except Exception as e:
+            self.write_log(f"[Minority] Engine error: {e}")
+
+    def _show_gesture_overlay(self):
+        """Show the Project Minority gesture control overlay."""
+        if self._gesture_overlay and self._gesture_overlay.isVisible():
+            self._gesture_overlay.raise_()
+            return
+        from actions.gesture_control import get_gesture_status, _GESTURE_RUNNING
+        ov = GestureOverlay(self.centralWidget(), get_gesture_status(), bool(_GESTURE_RUNNING))
+        ov.gesture_toggle.connect(self._toggle_gesture_engine)
+        ov.gesture_status_refresh.connect(self._refresh_gesture_status)
+        self._centre_overlay(ov)
+        ov.show()
+        ov.raise_()
+        self._gesture_overlay = ov
+
+    def _refresh_gesture_status(self):
+        """Update the gesture badge from engine telemetry."""
+        try:
+            from actions.gesture_control import _GESTURE_RUNNING, get_gesture_status
+            self._gesture_engine_running = bool(_GESTURE_RUNNING)
+            self._gesture_status.set_state("engaged" if self._gesture_engine_running else "standby")
+            # Refresh the overlay if it is visible
+            if self._gesture_overlay and self._gesture_overlay.isVisible():
+                status_text = get_gesture_status()
+                self._gesture_overlay.refresh_status(status_text, self._gesture_engine_running)
+        except Exception:
+            pass
 
     def _on_task_sig(self, task_name: str, label: str, details: str):
         self.hud.set_active_task(task_name, label, details)
@@ -6682,3 +7453,27 @@ class UltronUI:
     def stop_speaking(self):
         if not self.muted:
             self.set_state("LISTENING")
+
+    def show_toast(self, message: str, level: str = "info", duration_ms: int = 4000):
+        """Thread-safe: show a toast notification via the underlying MainWindow."""
+        self._win.show_toast(message, level=level, duration_ms=duration_ms)
+
+    # ── keyboard shortcuts (discoverability) ───────────────────────────────
+    def keyPressEvent(self, event):
+        from PyQt6.QtGui import QKeySequence
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.key() == Qt.Key.Key_Slash:
+                # Ctrl+/ → show keyboard shortcuts help
+                dlg = keyboard_shortcuts_dialog(self)
+                dlg.exec()
+                return
+            if event.key() == Qt.Key.Key_K:
+                # Ctrl+K → focus the composer
+                self._input.setFocus()
+                return
+        if event.key() == Qt.Key.Key_Escape:
+            # Esc → close any open overlay
+            if self._overlay and self._overlay.isVisible():
+                self._overlay.hide()
+                return
+        super().keyPressEvent(event)

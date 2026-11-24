@@ -1213,8 +1213,24 @@ class UltronLive:
             _known_name = (_user_cfg.get("user_name") or "").strip()
             _new_facts = extract_and_save_memory(text, user_name=_known_name or None)
             if _new_facts:
-                print(f"[Memory] 💾 Auto-saved: {', '.join(_new_facts)}")
-                self.ui.write_log(f"[Memory] Auto-saved: {', '.join(_new_facts)}")
+                _auto = [f for f in _new_facts if f.get("auto_saved")]
+                _pend = [f for f in _new_facts if not f.get("auto_saved")]
+                if _auto:
+                    _msg = ", ".join(f"{f['category']}/{f['key']}={f['value']}" for f in _auto)
+                    print(f"[Memory] 💾 Auto-saved: {_msg}")
+                    self.ui.write_log(f"[Memory] Auto-saved: {_msg}")
+                    self.ui.show_toast(
+                        f"Ultron learned: {', '.join(f['value'] for f in _auto)}",
+                        level="success", duration_ms=5000,
+                    )
+                if _pend:
+                    _msg = ", ".join(f"{f['category']}/{f['key']}={f['value']}" for f in _pend)
+                    print(f"[Memory] ⏳ Pending review: {_msg}")
+                    self.ui.write_log(f"[Memory] Pending review: {_msg}")
+                    self.ui.show_toast(
+                        f"Ultron wants to remember {len(_pend)} new fact(s) — check Memory panel",
+                        level="warning", duration_ms=6000,
+                    )
         except Exception:
             pass  # memory extraction must never block a turn
 
@@ -1660,7 +1676,14 @@ class UltronLive:
 
         if target_name == "recall_memory":
             query = args.get("query", "")
-            return search_memory(query) if query else "No query provided."
+            if not query:
+                return "No query provided."
+            # Try semantic graph search first, fall back to lexical search
+            try:
+                from memory.memory_manager import semantic_search_memory
+                return semantic_search_memory(query)
+            except Exception:
+                return search_memory(query)
 
         if target_name == "system_status":
             try:
@@ -1984,11 +2007,14 @@ class UltronLive:
 
         try:
             if name == "recall_memory":
-                # Local file search: no network, no second model. Kept out of
-                # the executor deliberately — it is a dictionary scan over a few
-                # hundred short strings, and a thread hop would cost more than
-                # the work itself.
-                result = search_memory(args.get("query", ""), limit=8)
+                # Local file search: no network, no second model.
+                query = args.get("query", "")
+                # Try semantic graph search first, fall back to lexical search
+                try:
+                    from memory.memory_manager import semantic_search_memory
+                    result = semantic_search_memory(query)
+                except Exception:
+                    result = search_memory(query, limit=8)
 
             elif name == "undo":
                 if str(args.get("action", "")).lower().strip() == "list":
@@ -2403,8 +2429,24 @@ class UltronLive:
                                     _known_name = (_user_cfg.get("user_name") or "").strip()
                                     _new_facts = extract_and_save_memory(full_in, user_name=_known_name or None)
                                     if _new_facts:
-                                        print(f"[Memory] 💾 Auto-saved: {', '.join(_new_facts)}")
-                                        self.ui.write_log(f"[Memory] Auto-saved: {', '.join(_new_facts)}")
+                                        _auto = [f for f in _new_facts if f.get("auto_saved")]
+                                        _pend = [f for f in _new_facts if not f.get("auto_saved")]
+                                        if _auto:
+                                            _msg = ", ".join(f"{f['category']}/{f['key']}={f['value']}" for f in _auto)
+                                            print(f"[Memory] 💾 Auto-saved: {_msg}")
+                                            self.ui.write_log(f"[Memory] Auto-saved: {_msg}")
+                                            self.ui.show_toast(
+                                                f"Ultron learned: {', '.join(f['value'] for f in _auto)}",
+                                                level="success", duration_ms=5000,
+                                            )
+                                        if _pend:
+                                            _msg = ", ".join(f"{f['category']}/{f['key']}={f['value']}" for f in _pend)
+                                            print(f"[Memory] ⏳ Pending review: {_msg}")
+                                            self.ui.write_log(f"[Memory] Pending review: {_msg}")
+                                            self.ui.show_toast(
+                                                f"Ultron wants to remember {len(_pend)} new fact(s) — check Memory panel",
+                                                level="warning", duration_ms=6000,
+                                            )
                                 except Exception:
                                     pass
                             in_buf = []
