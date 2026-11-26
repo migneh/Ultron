@@ -8,7 +8,7 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-from core import reminders as rm
+from ultron.core import reminders as rm
 
 
 @pytest.fixture(autouse=True)

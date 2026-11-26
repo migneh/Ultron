@@ -1,11 +1,14 @@
 """Token expiry must apply to HTTP, downloads, TTS and WebSocket entrypoints."""
 import time
+
 import pytest
+
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
-from dashboard import server
+
+from ultron.dashboard import server
 
 
 @pytest.fixture

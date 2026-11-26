@@ -5,9 +5,9 @@ import time
 
 import pytest
 
-from actions import file_controller as fc
-from actions import file_search as fs
-from core.action_loader import ActionRegistry, _validate
+from ultron.actions import file_controller as fc
+from ultron.actions import file_search as fs
+from ultron.core.action_loader import ActionRegistry, _validate
 
 
 @pytest.fixture
@@ -169,8 +169,8 @@ def test_search_registry_contract(workspace):
 def test_tools_are_auto_discovered_without_main_dispatch_changes(tmp_path):
     from pathlib import Path
 
-    from actions import quick_timer
-    from core.action_loader import discover_actions
+    from ultron.actions import quick_timer
+    from ultron.core.action_loader import discover_actions
 
     directory = tmp_path / "bundled_actions"
     directory.mkdir()

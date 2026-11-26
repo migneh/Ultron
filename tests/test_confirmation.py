@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from core import confirm as cf
+from ultron.core import confirm as cf
 
 
 @pytest.fixture

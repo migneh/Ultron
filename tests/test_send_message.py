@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from actions import send_message as action
-from core import confirm as cf
-from core import messaging as msg
-from core.action_loader import ActionRegistry, _validate
+from ultron.actions import send_message as action
+from ultron.core import confirm as cf
+from ultron.core import messaging as msg
+from ultron.core.action_loader import ActionRegistry, _validate
 
 
 class FakeTransport:
@@ -297,7 +297,7 @@ def test_list_omits_bodies_and_registry_dispatch_works(flow):
 
 def test_confirmation_ui_uses_plain_complete_text_and_request_ids():
     # Source contract only: PyQt6 is unavailable in this headless environment.
-    tree = ast.parse(Path("ui.py").read_text(encoding="utf-8"))
+    tree = ast.parse(Path("ultron/ui.py").read_text(encoding="utf-8"))
     classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
     banner = ast.unparse(classes["ConfirmBanner"])
     assert "setPlainText(detail)" in banner

@@ -2,8 +2,8 @@
 
 import pytest
 
-from core import messaging as msg
-from memory import config_manager
+from ultron.core import messaging as msg
+from ultron.memory import config_manager
 
 TOKEN = "123456:" + "A" * 30  # synthetic test value, not a credential
 

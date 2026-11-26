@@ -4,8 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from actions import quick_timer as qt
-from core.action_loader import ActionRegistry, _validate
+from ultron.actions import quick_timer as qt
+from ultron.core.action_loader import ActionRegistry, _validate
 
 
 class FakeHandle:

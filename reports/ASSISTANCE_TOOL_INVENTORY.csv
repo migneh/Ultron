@@ -1,0 +1,54 @@
+module,tool,handler,line,signature,dispatch_contract,schema_fields,directly_imported_by_tests
+airspace_sentinel,airspace_sentinel,airspace_sentinel,293,"parameters: dict, player=None, **kwargs",parameters_dict,"action,address,name,timeout",False
+android_bridge,android_bridge,android_bridge,336,"parameters: dict=None, response=None, player=None, session_memory=None",parameters_dict,"action,target,file_path,phone_path,partition,command",False
+audio_matrix,audio_matrix,audio_matrix_handler,235,"parameters: dict, player=None, **kwargs",parameters_dict,"action,sound",False
+biometric_sentinel,biometric_sentinel,biometric_sentinel,284,"parameters: dict, player=None, **kwargs",parameters_dict,"action,lock_intruder",False
+bounty_hunter,bounty_hunter,bounty_hunter,147,"parameters: dict, player=None, **kwargs",parameters_dict,"action,product,target_price,topic",False
+browser_control,browser_control,browser_control,926,"parameters: dict=None, response=None, player=None, session_memory=None",parameters_dict,"action,browser,url,query,engine,selector,text,description,direction,amount,key,path,incognito,clear_first",False
+cerebro_memory,cerebro_memory,cerebro_memory,143,"parameters: dict, player=None, **kwargs",parameters_dict,"action,query,entity,node_type,label,target_entity,relation",False
+chronos_predictive,chronos_predictive,chronos_predictive,267,"parameters: dict, player=None, **kwargs",parameters_dict,"action,state",False
+clipboard_control,clipboard_control,clipboard_control_handler,51,"parameters: dict, **kwargs",parameters_dict,"action,text",False
+cloud_watchtower,cloud_watchtower,cloud_watchtower,199,"parameters: dict, player=None, **kwargs",parameters_dict,"action,url,repo,name",False
+code_helper,code_helper,code_helper,525,"parameters: dict, response=None, player=None, session_memory=None, speak=None",parameters_dict,"action,description,language,output_path,file_path,code,args,timeout",False
+computer_control,computer_control,computer_control,358,"parameters: dict, response=None, player=None, session_memory=None",parameters_dict,"action,text,x,y,keys,key,direction,amount,seconds,title,description,type,field,clear_first,path",False
+computer_settings,computer_settings,computer_settings,784,"parameters: dict=None, response=None, player=None, session_memory=None",parameters_dict,"action,description,value",False
+desktop,desktop_control,desktop_control,421,"parameters: dict=None, response=None, player=None, session_memory=None",parameters_dict,"action,path,url,mode,task",True
+dev_agent,dev_agent,dev_agent,593,"parameters: dict, response=None, player=None, session_memory=None, speak=None",parameters_dict,"description,language,project_name,timeout",False
+drone_swarm,drone_swarm,drone_swarm,619,"action: str='list', drone_type: str='research', target: str='', directive: str='', drone_id: str='', interval: int=30, iterations: int=1, report_name: str='', subtasks: Optional[list[str]]=None, player=None, speak=None, **kwargs: Any",kwargs_swallow_parameters,"action,directive,drone_type,target,drone_id,interval,iterations,report_name",False
+file_controller,file_controller,file_controller,664,"parameters: dict | None=None, response=None, player=None, session_memory=None",parameters_dict,"dry_run,action,path,url,destination,new_name,content,name,extension,max_results,count",True
+file_processor,file_processor,file_processor,784,"parameters: dict, player=None, speak=None",parameters_dict,"file_path,action,instruction,format,width,height,scale,quality,start,end,timestamp,column,value,condition,ascending,save,destination",False
+file_search,file_search,file_search,293,"parameters: dict, **kwargs",parameters_dict,"path,query,extension,content,max_results,max_depth,min_size_bytes,max_size_bytes,modified_within_days",True
+flight_finder,flight_finder,flight_finder,296,"parameters: dict, player=None, speak=None",parameters_dict,"origin,destination,date,return_date,passengers,cabin,save",False
+game_updater,game_updater,game_updater,940,"parameters: dict, player=None, speak=None",parameters_dict,"action,platform,game_name,app_id,hour,minute,shutdown_when_done",False
+gesture_control,gesture_control,gesture_control,338,"parameters: dict, player=None, **kwargs",parameters_dict,"action,camera_index",False
+ghost_pilot,ghost_pilot,ghost_pilot_handler,231,"parameters: dict, player=None, **kwargs",parameters_dict,"action,query,app,browser,x,y",False
+git_sentinel,git_sentinel,git_sentinel,269,"parameters: dict, player=None, **kwargs",parameters_dict,"action,message,repo_path,branch,push",False
+iot_overlord,iot_overlord,iot_overlord,243,"parameters: dict, player=None, **kwargs",parameters_dict,"action,theme,entity_id,state",False
+macro_protocol,macro_protocol,macro_protocol,344,"parameters: dict, player=None, **kwargs",parameters_dict,"action,protocol_name,description,apps,command",False
+media_controller,media_controller,media_controller_handler,90,"parameters: dict, **kwargs",parameters_dict,"action,volume",False
+meeting_scribe,meeting_scribe,meeting_scribe,236,"parameters: dict, player=None, **kwargs",parameters_dict,"action,title",False
+network_auditor,network_auditor,network_auditor,686,"parameters: dict, player=None, **kwargs",parameters_dict,"action,target",False
+network_scanner,network_scanner,network_scanner,390,"parameters: dict, player=None, **kwargs",parameters_dict,"action,target,ports,quick",False
+omni_telepathy,omni_telepathy,omni_telepathy,158,"action: str='status', text: str='', command: str='', message: str='', player=None, **kwargs: Any",kwargs_swallow_parameters,"action,text,command",False
+open_app,open_app,open_app,243,"parameters=None, response=None, player=None, session_memory=None",parameters_dict,app_name,False
+optical_hud,optical_hud,optical_hud,176,"parameters: dict, player=None, **kwargs",parameters_dict,"action,prompt",False
+process_manager,process_manager,process_manager_handler,148,"parameters: dict, **kwargs",parameters_dict,"action,target,limit,sort_by",False
+purge_protocol,purge_protocol,purge_protocol,298,"parameters: dict, player=None, **kwargs",parameters_dict,"action,recycle_bin,dev_caches",False
+quick_timer,quick_timer,quick_timer_handler,232,"parameters: dict, speak=None, player=None, **kwargs",parameters_dict,"action,minutes,seconds,message,timer_id",True
+reminder,reminder,reminder,30,"parameters: dict, response=None, player=None, session_memory=None",parameters_dict,"action,date,time,message,timezone,fold,reminder_id,include_finished,limit",True
+screen_processor,screen_mind_read,screen_mind_read,188,"prompt: str='', region: str='all', player=None, speak=None, **kwargs",kwargs_swallow_parameters,"prompt,region",False
+self_evolution,self_evolution,self_evolution,351,"parameters: dict, player=None, **kwargs",parameters_dict,"action,tool_name,description,code,category",True
+send_message,send_message,send_message,87,"parameters: dict, response=None, player=None, session_memory=None",parameters_dict,"action,platform,receiver,message_text,message_id,limit",True
+sentry_protocol,sentry_protocol,sentry_protocol,353,"parameters: dict=None, response=None, player=None, session_memory=None",parameters_dict,action,False
+system_command,system_command,system_command_handler,205,"parameters: dict, speak=None, **kwargs",parameters_dict,"command,shell,timeout",True
+system_utility,system_utility,system_utility_handler,172,"parameters: dict, **kwargs",parameters_dict,"action,folder",False
+tool_status,tool_status,tool_status,37,"parameters: dict, **kwargs",parameters_dict,"section,limit",True
+video_player,video_player,video_player,170,"parameters: dict=None, response=None, player=None, session_memory=None",parameters_dict,"action,source",False
+voice_matrix,voice_matrix,voice_matrix,94,"parameters: dict, player=None, **kwargs",parameters_dict,"action,text,enabled,intensity,engine",False
+war_room,war_room,war_room_handler,157,"parameters: dict, player=None, **kwargs",parameters_dict,action,False
+weather_report,weather_report,weather_action,5,"parameters: dict, player=None, session_memory=None",parameters_dict,city,False
+web_autopilot,web_autopilot,web_autopilot,124,"action='price', query='', url='', origin='', destination='', date='', directive='', player=None, **kwargs",kwargs_swallow_parameters,"action,query,url,origin,destination,date,directive,return_date,cabin,auto_open",True
+web_search,web_search,web_search,293,"parameters: dict, response=None, player=None, session_memory=None",parameters_dict,"query,mode,items,aspect,max_results",True
+workspace_matrix,workspace_matrix,workspace_matrix,564,"parameters=None, response=None, player=None, session_memory=None",parameters_dict,"action,mode,project_path,music,volume,brightness",False
+workspace_recall,workspace_recall,workspace_recall,270,"parameters: dict, player=None, **kwargs",parameters_dict,"action,query,category,limit",True
+youtube_video,youtube_video,youtube_video,414,"parameters: dict, response=None, player=None, session_memory=None, speak=None",parameters_dict,"action,query,save,region,url",False

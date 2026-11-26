@@ -1,14 +1,16 @@
 import pytest
 
-from actions import file_controller as files
-from core import file_safety as safety
-from core import undo
+from ultron.actions import file_controller as files
+from ultron.core import confirm, undo
+from ultron.core import file_safety as safety
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(files, "_SAFE_ROOTS", [tmp_path])
     monkeypatch.setattr(files, "_get_desktop", lambda: tmp_path)
+    # Explicit fake host approval for legacy effect/byte/conflict regression cases.
+    monkeypatch.setattr(confirm, "request", lambda **kw: kw["run"]())
     undo.clear()
     yield
     undo.clear()
@@ -25,7 +27,7 @@ def test_transfer_and_undo(tmp_path, action):
     assert ("Moved:" if action != "copy" else "Copied:") in result
     assert dst.read_text() == "original"
     assert src.exists() == (action == "copy")
-    assert "Undone:" in undo.undo_last()
+    assert "Undo callback returned" in undo.undo_last()
     assert src.read_text() == "original" and not dst.exists()
 
 
@@ -110,7 +112,7 @@ def test_no_link_fallback(tmp_path, monkeypatch):
         raise OSError("cross-device or unsupported")
 
     monkeypatch.setattr(safety.os, "link", fail)
-    assert "failed" in files.move_file(str(src), destination=str(tmp_path / "dest"))
+    assert "OUTCOME_UNKNOWN" in files.move_file(str(src), destination=str(tmp_path / "dest"))
     assert src.read_text() == "keep" and not (tmp_path / "dest").exists()
 
 
@@ -125,26 +127,17 @@ def test_destination_inside_directory_checked(tmp_path):
 
 
 def test_organize_preview_apply_and_conflict_undo(tmp_path):
-    (tmp_path / "a.txt").write_text("a")
-    (tmp_path / "b.py").write_text("b")
-    assert "DRY RUN" in files.organize_desktop()
-    assert not (tmp_path / "Documents").exists()
-    assert "2 moved" in files.organize_desktop(False)
-    (tmp_path / "a.txt").write_text("later")
-    output = undo.undo_last()
-    assert "Restored 1; conflicts/unchanged 1" in output
-    assert (tmp_path / "a.txt").read_text() == "later"
-    assert (tmp_path / "Documents" / "a.txt").read_text() == "a"
-    assert (tmp_path / "b.py").read_text() == "b"
-    assert not (tmp_path / "Code").exists()
+    (tmp_path / "a.txt").write_text("keep")
+    assert "disabled" in files.organize_desktop(False)
+    assert (tmp_path / "a.txt").read_text() == "keep"
+    assert not undo.can_undo()
 
 
 def test_organize_preexisting_category_preserved(tmp_path):
-    (tmp_path / "Documents").mkdir()
-    (tmp_path / "a.txt").write_text("a")
-    files.organize_desktop(False)
-    undo.undo_last()
-    assert (tmp_path / "Documents").is_dir()
+    (tmp_path / "a.txt").write_text("keep")
+    assert "disabled" in files.organize_desktop(False)
+    assert (tmp_path / "a.txt").read_text() == "keep"
+    assert not undo.can_undo()
 
 
 def test_create_refuses_overwrite(tmp_path):
@@ -193,31 +186,17 @@ def test_transfer_limit(tmp_path, monkeypatch):
 
 
 def test_organize_journals_partial_success(tmp_path, monkeypatch):
-    (tmp_path / "a.txt").write_text("first")
-    (tmp_path / "b.txt").write_text("second")
-    real = safety.transfer
-
-    def partly_fail(src, dst, **kwargs):
-        if src.name == "b.txt":
-            raise OSError("mock failure")
-        return real(src, dst, **kwargs)
-
-    monkeypatch.setattr(safety, "transfer", partly_fail)
-    output = files.organize_desktop(False)
-    assert "1 moved" in output and "FAILED" in output
-    assert undo.can_undo()
-    undo.undo_last()
-    assert (tmp_path / "a.txt").read_text() == "first"
-    assert (tmp_path / "b.txt").read_text() == "second"
+    (tmp_path / "a.txt").write_text("keep")
+    assert "disabled" in files.organize_desktop(False)
+    assert (tmp_path / "a.txt").read_text() == "keep"
+    assert not undo.can_undo()
 
 
 def test_organize_category_symlink_blocked(tmp_path):
-    other = tmp_path / "other"
-    other.mkdir()
-    (tmp_path / "Documents").symlink_to(other, target_is_directory=True)
     (tmp_path / "a.txt").write_text("keep")
-    assert "SKIPPED" in files.organize_desktop(False)
-    assert (tmp_path / "a.txt").exists() and not list(other.iterdir())
+    assert "disabled" in files.organize_desktop(False)
+    assert (tmp_path / "a.txt").read_text() == "keep"
+    assert not undo.can_undo()
 
 
 def test_target_creation_race_does_not_overwrite(tmp_path, monkeypatch):
@@ -238,7 +217,8 @@ def test_target_creation_race_does_not_overwrite(tmp_path, monkeypatch):
 def test_write_limits(tmp_path, monkeypatch):
     target = tmp_path / "file"
     target.write_bytes(b"original")
-    monkeypatch.setattr(files, "_UNDO_CONTENT_LIMIT", 3)
+    from ultron.core import file_mutations
+    monkeypatch.setattr(file_mutations, "MAX_BYTES", 3)
     assert "rejected" in files.write_file(str(target), content="x")
     assert target.read_bytes() == b"original"
 
