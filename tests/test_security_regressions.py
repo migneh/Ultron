@@ -1,7 +1,8 @@
 """Consent and shell boundary regressions. No generated code is executed."""
 import pytest
-from actions import self_evolution as se
-from actions import system_command as sc
+
+from ultron.actions import self_evolution as se
+from ultron.actions import system_command as sc
 
 
 @pytest.mark.parametrize("command", [
@@ -45,7 +46,6 @@ def test_ipconfig_mutations_require_confirmation(command):
 
 
 def test_generated_desktop_code_is_not_executed_before_approval(monkeypatch):
-    from actions import desktop
+    from ultron.actions import desktop
     monkeypatch.setattr(desktop, "_build_sandbox", lambda: pytest.fail("ran before approval"))
-    monkeypatch.setattr(desktop.confirm_gate, "request", lambda **kwargs: "awaiting approval")
-    assert desktop._execute_generated_code('print("test")') == "awaiting approval"
+    assert "disabled" in desktop._execute_generated_code('print("test")')

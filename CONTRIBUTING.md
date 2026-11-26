@@ -6,10 +6,10 @@ Python 3.11–3.13 on Windows, macOS, and Linux.
 
 ## Ground rules
 
-1. **Security first.** `actions/system_command.py` and `actions/self_evolution.py`
+1. **Security first.** `ultron/actions/system_command.py` and `ultron/actions/self_evolution.py`
    are the most sensitive files in the repository — they execute code on the
    host. Any change to them requires explicit review and must keep the
-   confirmation gate (`core/confirm.py`) and the audit logs intact. Never
+   confirmation gate (`ultron/core/confirm.py`) and the audit logs intact. Never
    weaken the destructive-command blocklist or the hot-load consent flow.
 2. **No secrets in the tree.** `config/api_keys.json`, `*.db`, `*.env`,
    `token*.json`, and `logs/` are gitignored. Do not commit API keys, tokens,
@@ -18,7 +18,7 @@ Python 3.11–3.13 on Windows, macOS, and Linux.
    `python3 -m pytest` before pushing.
 4. **Lint and type-check.** `ruff` (E/F/B/I rules) and `mypy` are configured
    in `pyproject.toml`. Run them on the files you touch (CI enforces
-   `ruff check core/config.py tests/` and `mypy core/config.py tests/`). The
+   `ruff check ultron/core/config.py tests/` and `mypy ultron/core/config.py tests/`). The
    rest of the codebase carries pre-existing lint debt that is being paid down
    incrementally — do not introduce *new* violations in files you modify.
 5. **Every Python file must compile.** CI runs `python3 -m py_compile` on the
@@ -48,7 +48,7 @@ cp config/api_keys.json.example config/api_keys.json
 # edit config/api_keys.json and paste your key
 
 # Launch
-python main.py
+python -m ultron
 ```
 
 ## Submitting a change
@@ -58,8 +58,8 @@ python main.py
 3. Add or update tests in `tests/` for anything you change.
 4. Run `python3 -m pytest`, `ruff check .`, and `mypy .`.
 5. Open a pull request describing the what and why. Mention whether it touches
-   security-sensitive code (`actions/system_command.py`,
-   `actions/self_evolution.py`, `dashboard/server.py`, `core/confirm.py`).
+   security-sensitive code (`ultron/actions/system_command.py`,
+   `ultron/actions/self_evolution.py`, `ultron/dashboard/server.py`, `ultron/core/confirm.py`).
 
 ## License & provenance
 

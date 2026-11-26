@@ -3,9 +3,9 @@ import threading
 
 import pytest
 
-from actions import web_autopilot as auto
-from actions import web_search as search
-from core import web_research as web
+from ultron.actions import web_autopilot as auto
+from ultron.actions import web_search as search
+from ultron.core import web_research as web
 
 
 @pytest.mark.parametrize(

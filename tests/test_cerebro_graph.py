@@ -1,14 +1,15 @@
 """Graph regressions, using isolated SQLite databases."""
 import pytest
+
 pytest.importorskip("numpy")
-from memory import cerebro_graph as cg
-from memory import memory_manager as mm
+from ultron.memory import cerebro_graph as cg
+from ultron.memory import memory_manager as mm
 
 
 @pytest.fixture(autouse=True)
 def isolated_graph(tmp_path, monkeypatch):
     monkeypatch.setattr(cg, "_DB_PATH", tmp_path / "graph.db")
-    monkeypatch.setattr(mm, "MEMORY_PATH", tmp_path / "memory.json")
+    monkeypatch.setattr(mm, "MEMORY_PATH", tmp_path / 'ultron.memory.json')
 
 
 def test_search_remains_correct_after_vocabulary_growth():

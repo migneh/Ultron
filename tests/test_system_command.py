@@ -3,10 +3,10 @@ Tests for actions/system_command.py command classification.
 
 Pure functions — no subprocess is actually executed.
 """
-import actions.system_command as sc
+import ultron.actions.system_command as sc
 
 
-def test_read_only_commands_run_directly():
+def test_inspection_commands_require_confirmation():
     for cmd in [
         "whoami",
         "ipconfig",
@@ -19,7 +19,7 @@ def test_read_only_commands_run_directly():
         "hostname",
         "date",
     ]:
-        assert sc._classify(cmd) == "direct", f"expected direct for {cmd!r}"
+        assert sc._classify(cmd) == "confirm", f"expected confirm for {cmd!r}"
 
 
 def test_state_changing_commands_require_confirmation():
@@ -68,9 +68,9 @@ def test_git_write_subcommands_require_confirmation():
     assert sc._classify("git push") == "confirm"
     assert sc._classify("git commit -m m") == "confirm"
     assert sc._classify("git reset --hard") == "confirm"
-    assert sc._classify("git status") == "direct"
-    assert sc._classify("git log") == "direct"
-    assert sc._classify("git branch") == "direct"
+    assert sc._classify("git status") == "confirm"
+    assert sc._classify("git log") == "confirm"
+    assert sc._classify("git branch") == "confirm"
 
 
 def test_handler_refuses_destructive_without_confirmation():
@@ -84,10 +84,9 @@ def test_handler_gates_state_changing_behind_confirmation_headless():
     assert "I cannot confirm" in res and "have not done it" in res
 
 
-def test_handler_runs_read_only_directly():
+def test_handler_gates_inspection_headless():
     res = sc.system_command_handler({"command": "whoami", "shell": "bash", "timeout": 10})
-    assert not res.startswith("Command blocked")
-    assert not res.startswith("[CONFIRMATION_PENDING]")
+    assert "I cannot confirm" in res and "have not done it" in res
 
 
 def test_handler_empty_command():

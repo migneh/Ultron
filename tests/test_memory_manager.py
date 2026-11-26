@@ -1,14 +1,15 @@
 """Memory integrity regressions. All persistence is redirected to temporary files."""
-from concurrent.futures import ThreadPoolExecutor
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from memory import memory_manager as mm
+
+from ultron.memory import memory_manager as mm
 
 
 @pytest.fixture(autouse=True)
 def isolated_memory(tmp_path, monkeypatch):
-    monkeypatch.setattr(mm, "MEMORY_PATH", tmp_path / "memory.json")
+    monkeypatch.setattr(mm, "MEMORY_PATH", tmp_path / 'ultron.memory.json')
     monkeypatch.setattr(mm, "_graph_enabled", lambda: False)
 
 

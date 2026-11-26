@@ -5,9 +5,9 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from actions import reminder as action
-from core import reminders as rm
-from core.action_loader import ActionRegistry, _validate
+from ultron.actions import reminder as action
+from ultron.core import reminders as rm
+from ultron.core.action_loader import ActionRegistry, _validate
 
 
 @pytest.fixture(autouse=True)

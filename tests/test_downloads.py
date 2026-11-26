@@ -3,15 +3,16 @@ import threading
 
 import pytest
 
-from actions import file_controller as files
-from core import downloads as downloads
-from core import undo
-from core import web_research as web
+from ultron.actions import file_controller as files
+from ultron.core import confirm, undo
+from ultron.core import downloads as downloads
+from ultron.core import web_research as web
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(files, "_SAFE_ROOTS", [tmp_path])
+    monkeypatch.setattr(confirm, "request", lambda **kw: kw["run"]())
     undo.clear()
     yield
     undo.clear()
@@ -168,14 +169,15 @@ def test_redirects_and_dns_revalidated(tmp_path, monkeypatch):
         return ["8.8.8.8"]
 
     monkeypatch.setattr(web, "addresses", addresses)
-    assert "Downloaded:" in files.download_file("https://example.com/file", str(tmp_path))
-    assert visited == resolved and len(visited) == 2
+    assert "redirect refused" in files.download_file("https://example.com/file", str(tmp_path))
+    assert visited == resolved == ["https://example.com/file"]
+    assert not list(tmp_path.iterdir())
 
 
 def test_redirect_limit(tmp_path, monkeypatch):
     visited = transport(monkeypatch, [Response(302, {"Location": "/next"}) for _ in range(4)])
-    assert "redirect limit" in files.download_file("https://example.com/file", str(tmp_path))
-    assert len(visited) == 4 and not list(tmp_path.iterdir())
+    assert "redirect refused" in files.download_file("https://example.com/file", str(tmp_path))
+    assert len(visited) == 1 and not list(tmp_path.iterdir())
 
 
 def test_stream_failure_no_publication(tmp_path, monkeypatch):
@@ -257,7 +259,7 @@ def test_private_dns_redirect_blocked(tmp_path, monkeypatch):
         return ["8.8.8.8"]
 
     monkeypatch.setattr(web, "addresses", addresses)
-    assert "DNS blocked" in files.download_file("https://example.com/file", str(tmp_path))
+    assert "redirect refused" in files.download_file("https://example.com/file", str(tmp_path))
     assert response.closed and not list(tmp_path.iterdir())
 
 

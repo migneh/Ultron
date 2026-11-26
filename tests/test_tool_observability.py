@@ -4,10 +4,10 @@ import threading
 
 import pytest
 
-from actions import tool_status as status
-from core import action_loader as actions
-from core import plugin_loader as plugins
-from core import tool_observability as telemetry
+from ultron.actions import tool_status as status
+from ultron.core import action_loader as actions
+from ultron.core import plugin_loader as plugins
+from ultron.core import tool_observability as telemetry
 
 
 @pytest.fixture
@@ -230,7 +230,7 @@ def test_invalid_context_not_passed_to_handler(observer):
 def test_dispatch_source_does_not_log_payloads():
     from pathlib import Path
 
-    source = Path("main.py").read_text()
+    source = Path("ultron/app.py").read_text()
     assert "with args: {fn_args}" not in source
     assert "output: {str(tool_res)" not in source
     assert "details=str(fn_args)" not in source

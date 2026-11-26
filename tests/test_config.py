@@ -4,7 +4,7 @@ Tests for core/config.py — centralized configuration.
 These tests never touch the real config/api_keys.json: they monkeypatch the
 module-level paths and environment so each case is hermetic.
 """
-from core import config as cfg
+from ultron.core import config as cfg
 
 
 def _write_tmp_config(tmp_path, data: dict):
@@ -131,6 +131,6 @@ def test_get_ai_model_none_when_missing(monkeypatch, tmp_path):
 
 def test_workspace_recall_imports_available():
     """workspace_recall must import re and subprocess (P1 bug fix)."""
-    import actions.workspace_recall as wr
+    import ultron.actions.workspace_recall as wr
     assert hasattr(wr, "re"), "workspace_recall must import re"
     assert hasattr(wr, "subprocess"), "workspace_recall must import subprocess"
