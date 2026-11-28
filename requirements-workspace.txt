@@ -1,0 +1,5 @@
+# Optional desktop-only Workspace OAuth and secure OS credential storage.
+# Install on the actual Ultron host, not to connect an Arena integration.
+google-auth>=2.29,<3
+google-auth-oauthlib>=1.2,<2
+keyring>=25,<26

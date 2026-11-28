@@ -1,0 +1,17 @@
+{
+    "assistant_name": "Ultron",
+    "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE",
+    "os_system": "windows",
+    "ai_provider": "gemini",
+    "ai_model": "models/gemini-2.0-flash-exp",
+    "voice_name": "Ultron",
+    "voice_rate": "+15%",
+    "user_name": "Boss",
+    "ui_color": "#ff0008",
+    "ultron_voice_warp": true,
+    "camera_index": 0,
+    "wake_word_enabled": false,
+    "wake_word_model": "hey_jarvis",
+    "wake_word_threshold": 0.5,
+    "wake_word_label": "hey jarvis"
+}

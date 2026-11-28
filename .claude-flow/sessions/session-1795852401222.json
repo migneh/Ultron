@@ -1,0 +1,14 @@
+{
+  "id": "session-1795852401222",
+  "startedAt": "2026-11-28T07:53:21.222Z",
+  "cwd": "C:\\Users\\nidha\\OneDrive\\Desktop\\Ultron",
+  "context": {},
+  "metrics": {
+    "edits": 0,
+    "commands": 0,
+    "tasks": 0,
+    "errors": 0
+  },
+  "endedAt": "2026-11-28T07:53:43.694Z",
+  "duration": 22473
+}

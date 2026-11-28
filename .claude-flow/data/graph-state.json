@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "updatedAt": 1795852440704,
+  "nodeCount": 2,
+  "contentFingerprint": "10b684b6_18dbdeb1_97",
+  "nodes": {
+    "insight-1795852278876-e6df": {
+      "id": "insight-1795852278876-e6df",
+      "category": "insights",
+      "confidence": 0.5,
+      "accessCount": 0,
+      "createdAt": 1795852278876
+    },
+    "insight-1795852278876-kwr2": {
+      "id": "insight-1795852278876-kwr2",
+      "category": "insights",
+      "confidence": 0.5,
+      "accessCount": 0,
+      "createdAt": 1795852278876
+    }
+  },
+  "edges": [
+    {
+      "sourceId": "insight-1795852278876-e6df",
+      "targetId": "insight-1795852278876-kwr2",
+      "type": "similar",
+      "weight": 0.828125
+    }
+  ],
+  "pageRanks": {
+    "insight-1795852278876-e6df": 0.3508771211772586,
+    "insight-1795852278876-kwr2": 0.6491228788227412
+  }
+}

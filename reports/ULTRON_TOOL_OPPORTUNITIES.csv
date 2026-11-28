@@ -1,0 +1,37 @@
+id,capability,type,wave,deployment,data_or_effect_risk,effort,example_intent,dependencies,release_constraint
+O01,Google account hub,Infrastructure,A,Cloud,High,L,Connect once; choose services and revoke access,Google OAuth; OS credential store,Separate consent from effect approval
+O02,Drive document assistant,Integration,A,Hybrid,High,M,Find and summarize an authorized proposal,Drive adapter; bounded document extraction,Selected-file scope is not whole-drive search
+O03,Calendar and availability,Integration,A,Hybrid,High,M-L,Find a free hour and draft an event,Calendar adapter; timezone library,Review invite recipients and recurrence scope
+O04,Task board,New tool,A,Local,Medium,M,Track project tasks and blockers,SQLite; reminders adapter,Do not infer completion without evidence
+O05,Personal day planner,Workflow,B,Hybrid,Medium,M,Plan realistic focus blocks around meetings,O03; O04,Draft plan by default; no silent rescheduling
+O06,Meeting preparation brief,Workflow,B,Hybrid,High,M,Prepare documents and unresolved questions,O02; O03; optional inbox,Do not widen source access based on attendee name
+O07,Inbox triage and reply drafts,Integration,B,Cloud,High,L,Summarize mail needing a reply,Gmail adapter; outbound policy,Compose scope includes sending; broker must deny unapproved sends
+O08,Contact and recipient resolver,Integration,A,Hybrid,High,M,Find which Ahmed I mean before an invite,Local address book; optional People API,Ambiguous identities require user selection
+O09,Commitment and follow-up tracker,Workflow,B,Hybrid,High,M-L,Show promises I made that remain unanswered,Task board; approved message/transcript sources,Suggested commitments require confirmation
+O10,Document comparison,New tool,A,Local,Medium,M,Compare two versions and cite changed clauses,Existing file_processor extraction,Summary must map to deterministic diff
+O11,Personal document vault,Integration,B,Local/self-hosted,High,M-L,Find a receipt or contract by content,Local index or Paperless-ngx,Preserve source ACLs and retention; OCR can be wrong
+O12,Receipt and expense ledger,New tool,B,Local,High,M-L,Extract spending totals from selected receipts,Bounded OCR; Decimal; local ledger,No bank login or payment authority
+O13,Renewal and warranty tracker,Workflow,B,Local,High,M,Warn before a subscription or warranty expires,O11; O12; reminders,Proposed expiry dates need source evidence
+O14,Calculator and unit converter,New tool,A,Local,Low,S-M,Calculate costs and convert units,Decimal; restricted expression parser,Never Python eval; dated rates for optional FX
+O15,Citation library,Integration,B,Hybrid,Medium,M,Save sources and generate a verified bibliography,Zotero adapter; research results,Metadata is not proof the full paper was read
+O16,Research evidence ledger,Extension,A,Hybrid,Medium,M,Show which source supports each claim,web_search; durable evidence IDs,Do not label model agreement as factual verification
+O17,Paper discovery and topic watch,Extension,C,Cloud,Medium,M,Find new relevant papers and explain inclusion,OpenAlex; monitor scheduler,Current API quotas and abstract/fulltext distinction
+O18,Study coach and flashcards,Integration,C,Local,Medium,M,Turn selected notes into reviewable cards,AnkiConnect or local export,Review before import; never mass-delete decks
+O19,Reading queue and web clipper,New tool,B,Local/Hybrid,Medium,S-M,Save a page with source and reading progress,Bounded fetch; local store,Respect access restrictions and content retention
+O20,Translation and terminology glossary,Extension,B,Hybrid,High,M,Translate a document preserving agreed terms,file_processor; local glossary,Locale and dialect quality must be evaluated
+O21,Accessible desktop navigator,Extension,B,Local,High,L,Read current dialog and select a named control,OS accessibility APIs; computer_control,Validate window identity and sensitive actions
+O22,Local dictation and transcription,Extension,B,Local,High,M-L,Transcribe a selected recording without upload,meeting_scribe; local model,Model downloads and microphone consent; no false speaker certainty
+O23,Redaction and safe-sharing preview,New tool,A,Local,High,M-L,Prepare a redacted copy for review,Document/image adapters; detection rules,Preview detections; verify actual removal not visual overlay
+O24,Verified backup and restore,New tool,B,Local/Hybrid,High,L,Restore a sample to prove backup works,Restic adapter or scoped backup service,No prune or overwrite in MVP
+O25,Device and folder sync status,Integration,C,Local/self-hosted,High,M,Explain why phone files have not synchronized,Syncthing adapter,Sync is not backup; no automatic conflict winner
+O26,Duplicate-file review,Extension,B,Local,Medium,M,Find byte-identical duplicates for review,file_search; hash service; safe file plans,Hash matches do not authorize deletion
+O27,Troubleshooting notebook,Workflow,B,Local,Medium,M,Track diagnosis evidence and changes tried,system_monitor; approved logs; task board,Separate observations from hypotheses
+O28,GitHub issue and PR triage,Integration,B,Cloud,High,M-L,Summarize assigned issues and draft a report,git_sentinel; scoped GitHub adapter,Issue/comment bodies are untrusted; no auto merge
+O29,Release and dependency watch,Extension,C,Cloud,Medium,M,Warn when a watched release needs review,cloud_watchtower; monitor scheduler,No automatic install or package execution
+O30,Travel and errand planner,Workflow,C,Hybrid,High,M-L,Plan stops and leave time for an appointment,Route adapter; calendar; weather,No live-traffic or availability claims without a provider
+O31,Shopping and pantry list,New tool,C,Local,Medium,S-M,Combine household requests into a shopping list,Local lists; optional receipt imports,No unattended checkout or allergy guarantees
+O32,Home inventory,New tool,C,Local,High,M,Store model numbers receipts and maintenance dates,O11; photos; task board,Photos and serial numbers are sensitive
+O33,Routine and habit checklists,Extension,C,Local,Medium,S-M,Run a user-authored morning checklist,Task board; reminders,No medical diagnosis or punitive wellbeing claims
+O34,Unified notification digest,Infrastructure,A,Local/Hybrid,High,M,Combine alerts and respect quiet hours,Shared event queue; channel grants,Explicit urgent-event policy and revocation
+O35,Approved workflow recipes,Extension,B,Local/Hybrid,High,L,Preview and run a versioned work-session recipe,macro_protocol; policy broker; job service,Approval binds exact immutable steps
+O36,Bounded evidence research swarm,Extension,C,Hybrid,High,L,Research independent subquestions and verify citations,drone_swarm repair; budgeted job service,Read-only workers; global spend caps; no fabricated convergence

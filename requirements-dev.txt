@@ -1,0 +1,11 @@
+# ── Development dependencies for Ultron ──
+# Install with:  pip install -r requirements-dev.txt
+# These are NOT needed to run Ultron; they are for linting, type-checking, and tests.
+
+# Linting / formatting
+ruff>=0.8,<1
+# Static type checking
+mypy>=1.11,<2
+# Test runner
+pytest>=8,<9
+pytest-mock>=3,<4

@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "computedAt": 1795852440706,
+  "entries": [
+    {
+      "id": "insight-1795852278876-kwr2",
+      "content": "File C:\\Users\\nidha\\OneDrive\\Desktop\\Ultron\\ultron\\__main__.py was edited 4 times this session — likely a hot path worth monitoring.",
+      "summary": "Frequently edited: __main__.py (4x)",
+      "category": "insights",
+      "confidence": 0.5,
+      "pageRank": 0.6491228788227412,
+      "accessCount": 0,
+      "words": [
+        "file",
+        "users",
+        "nidha",
+        "onedrive",
+        "desktop",
+        "ultron",
+        "ultron",
+        "main",
+        "edited",
+        "times",
+        "session",
+        "likely",
+        "hot",
+        "path",
+        "worth",
+        "monitoring",
+        "frequently",
+        "edited",
+        "main"
+      ]
+    },
+    {
+      "id": "insight-1795852278876-e6df",
+      "content": "File C:\\Users\\nidha\\OneDrive\\Desktop\\Ultron\\scripts\\update.py was edited 4 times this session — likely a hot path worth monitoring.",
+      "summary": "Frequently edited: update.py (4x)",
+      "category": "insights",
+      "confidence": 0.5,
+      "pageRank": 0.3508771211772586,
+      "accessCount": 0,
+      "words": [
+        "file",
+        "users",
+        "nidha",
+        "onedrive",
+        "desktop",
+        "ultron",
+        "scripts",
+        "update",
+        "edited",
+        "times",
+        "session",
+        "likely",
+        "hot",
+        "path",
+        "worth",
+        "monitoring",
+        "frequently",
+        "edited",
+        "update"
+      ]
+    }
+  ]
+}
